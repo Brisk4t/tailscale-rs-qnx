@@ -1,0 +1,10 @@
+[package]
+name = "tokio-smoke"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Same versions as tailscale-rs's Cargo.lock, so patches made here carry over.
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+libc = "=0.2.190"
+socket2 = "=0.6.5"

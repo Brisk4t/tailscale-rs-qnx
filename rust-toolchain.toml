@@ -1,0 +1,5 @@
+# x86_64-pc-qnx is tier 3: no prebuilt std, built with -Zbuild-std. Nightlies can break
+# tier-3 targets, so stay on a dated one that has passed the smoke tests in smoke/.
+[toolchain]
+channel = "nightly-2026-11-09"
+components = ["rust-src"]

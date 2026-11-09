@@ -99,8 +99,13 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
       with `[patch.crates-io]`.
       → Started in Phase 0: `mio-1.2.4`, `socket2-0.6.5`, `tokio-1.53.3` (each a git repo: pristine crates.io
       commit + uncommitted QNX diff, `git diff` = the upstream patch). Wired into this repo's `Cargo.toml`;
-      tailscale-rs not wired up yet (`[patch.crates-io]` can go in its local `.cargo/config.toml` to keep
-      `Cargo.toml` clean).
+      tailscale-rs: `[patch.crates-io]` (absolute paths) is in its local `.cargo/config.toml`, so `Cargo.toml`
+      stays clean (`Cargo.lock` does change, don't commit it). With `-Zbuild-std`, cargo prints
+      `warning: patch ... was not used in the crate graph` for every config-level patch. It's spurious: cargo
+      also resolves the std library graph, applies config patches there too, and std doesn't use them.
+      `cargo tree -i mio` and `cargo build -v` confirm the forks are what's compiled.
+      First `-p tailscale --examples` build stops at **`aws-lc-sys`** (expected) and **`signal-hook-registry`**
+      (`libc::SA_RESTART` missing for qnx; pulled in by tokio's `signal` feature).
 - [ ] Discovery loop:
       `cargo +nightly build --target x86_64-pc-qnx -p tailscale --examples`. Fix the next failing crate, repeat.
 - [ ] **mio**: add `qnx` to every `nto` cfg (poll selector, `net.rs` socket flags). Run mio's tests on target.
@@ -110,12 +115,43 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
       `impl_netbsd`, which needs NetBSD's `LOCAL_PEEREID` (QNX 8 headers only have FreeBSD `LOCAL_PEERCRED`).
 - [ ] **socket2**: → cfgs done (4 files); the two `all(target_os = "nto", any(nto70, nto71))` `TCP_KEEPALIVE`
       sites correctly stay io-pkt-only, so `qnx` gets `TCP_KEEPIDLE`.
-- [ ] **socket2 / getrandom / errno / rustix**: same pattern. `getrandom` on QNX should use `/dev/urandom`
-      or `arc4random` (check what the `nto` path does).
+- [x] **getrandom** 0.2.17 / 0.3.4 / 0.4.3, all three in the QNX graph: 0.2 ← ring, 0.3 ← rand 0.9,
+      0.4 ← rand 0.10 + x25519-dalek (WireGuard/Noise keys). QNX 8's libc has **no** `getrandom`,
+      `getentropy` or `arc4random`, so `qnx` takes the `nto` path: the `use_file` backend reading
+      `/dev/urandom` (served by QNX's `random` resmgr, seeded from `/data/var/random/rnd-seed`), with
+      `__get_errno_ptr` for errno. 0.3/0.4 also need `qnx` in the `Cargo.toml` target table that pulls in
+      `libc` (the `.rs`-only script misses manifests). Validated on target by `smoke/random-smoke`: 10k unique
+      32-byte draws, bit balance, byte-histogram χ², from 4 threads, per version.
+- [ ] **errno / rustix**: same pattern (not hit yet).
 - [ ] **TLS crypto**: add a `ring` feature to `ts_tls_util` (`tokio-rustls` `ring` feature;
       `insecure.rs` uses `rustls::crypto::aws_lc_rs::default_provider()` → make the provider selectable).
       `ring` 0.17 builds through `cc`, which already knows `qnx`. Later, optionally get `aws-lc-sys`
       cross-building via a CMake toolchain file for qcc.
+      → Done in tailscale-rs (uncommitted, `crates/utils/ts_tls_util`): `tokio-rustls` gets `aws-lc-rs` on
+      `cfg(not(target_os = "qnx"))` and `ring` on `cfg(target_os = "qnx")` (target-specific deps; resolver 3
+      doesn't unify features across targets). A `CRYPTO_PROVIDER` static picks the matching provider and is
+      passed via `ClientConfig::builder_with_provider`, in `connect_alpn` and `connect_insecure`. Host
+      behaviour is unchanged: still aws-lc, same protocol versions; clippy `--all-features -D warnings` and
+      nightly fmt are clean. `cargo tree --target x86_64-pc-qnx -i aws-lc-sys` is now empty.
+      Why aws-lc failed: its build passes `--include=<prefix header>`, which qcc rejects (`qcc -include X`
+      and `ntox86_64-gcc --include=X` both work).
+      **ring 0.17.14 needs a fork** (2 lines), for two reasons:
+      1. `src/rand.rs` only implements `SecureRandom for SystemRandom` on an OS allowlist without `qnx`
+         (rustls then fails to compile). Added `qnx`; it then draws from getrandom 0.2 → `/dev/urandom`.
+      2. `build.rs` only builds its perlasm for OSes in `LINUX_ABI`. Without `qnx` there, ring's C part
+         builds but **binaries fail to link** (undefined `ring_core_0_17_14__sha512_block_data_order_nohw`,
+         `aesni_gcm_decrypt`, ...): on x86_64 ring has no pure-C fallback; its Rust code calls the asm
+         directly. (An earlier note here claiming a slower-but-working C fallback was wrong; libraries
+         compiled, but nothing had been linked yet.) Added `qnx`: QNX x86_64 is SysV ELF, so the `elf`
+         perlasm flavour applies.
+      Validated on target by `smoke/random-smoke`: round trips + tamper rejection (AES-256-GCM,
+      ChaCha20-Poly1305), SHA-256 KAT, X25519, Ed25519; plus `random-smoke ring-vectors`, a deterministic
+      run over SHA-2/HMAC/AES-GCM/ChaCha20-Poly1305/Ed25519 at 19 lengths (0 B–64 KiB), whose digests match
+      the Linux host exactly in debug and release (QEMU `--cpu host` → same AVX2/AES-NI paths).
+      ring's own test suite wasn't run: the crates.io package omits its test vectors.
+      With these, `ring`, `rustls`, `rand` 0.9/0.10 and `x25519-dalek` build for QNX inside tailscale-rs.
+      Next blocker for `tokio-rustls`/`ts_tls_util`: tokio 1.54.1 (needs re-fork; tailscale-rs moved to v0.7.1)
+      and `signal-hook-registry` (`SA_RESTART`).
 - [ ] Verify ABI-sensitive bits against QNX 8.0 headers in `~/qnx800/target/qnx/usr/include`
       (`sockaddr` layouts, `msghdr`, `IP_PKTINFO`/`IP_RECVDSTADDR`, `SO_REUSEPORT`, `MSG_*` flags) wherever the crates' `nto` code
       assumed 7.x/io-pkt.

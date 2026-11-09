@@ -10,7 +10,8 @@ What's here so far (Phase 0):
 | `smoke/hello` | Hello world for the QNX target |
 | `smoke/std-smoke` | std checks: threads, sync, time, fs, env, panics, TCP/UDP v4+v6, DNS, process, internet |
 | `smoke/tokio-smoke` | tokio checks: timers, tasks, UDP echo (32 clients), 1 MiB TCP echo; also a `serve` mode |
-| `patches/` | QNX patches for `mio` 1.2.4, `socket2` 0.6.5, `tokio` 1.53.3 (the versions tailscale-rs locks) |
+| `smoke/random-smoke` | getrandom 0.2/0.3/0.4 randomness checks, ring crypto checks; `ring-vectors` mode for host-vs-QNX comparison |
+| `patches/` | QNX patches for `mio` 1.2.4, `socket2` 0.6.5, `tokio` 1.53.3, `getrandom` 0.2.17/0.3.4/0.4.3, `ring` 0.17.14 |
 | `scripts/setup-qnx-crates.sh` | Downloads those crates from crates.io and applies the patches |
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the QNX target and runs it over ssh |
 | `scripts/qnx-target-ip.sh` | Prints the QEMU target's current IP (from the libvirt DHCP lease) |
@@ -56,10 +57,11 @@ source ~/qnx800/qnxsdp-env.sh
 
 ## 2. Patched crates
 
-mio, socket2 and tokio don't know `target_os = "qnx"` yet. Create the patched forks next to this repo:
+mio, socket2, tokio, getrandom and ring don't know `target_os = "qnx"` yet. Create the patched forks next to
+this repo (each `patches/<crate>-<version>.patch` becomes `<crate>-<version>/`):
 
 ```bash
-scripts/setup-qnx-crates.sh          # -> ~/Projects/QNX/qnx-crates/{mio-1.2.4,socket2-0.6.5,tokio-1.53.3}
+scripts/setup-qnx-crates.sh          # -> ~/Projects/QNX/qnx-crates/{mio-1.2.4,socket2-0.6.5,tokio-1.53.3,...}
 ```
 
 Each fork is a git repo: one commit with the pristine crates.io source, and the QNX patch left uncommitted,
@@ -128,6 +130,7 @@ cargo run -p hello
 cargo run -p std-smoke
 cargo run -p tokio-smoke
 cargo run --release -p tokio-smoke
+cargo run -p random-smoke
 ```
 
 Expected output:
@@ -137,6 +140,15 @@ hello from Rust on qnx (x86_64), pid ...
 ...
 13 checks, 0 required failures       # std-smoke
 4 checks, 0 failures                 # tokio-smoke
+4 checks, 0 failures                 # random-smoke
+```
+
+To check that ring computes the same bytes on QNX as on the host, compare the deterministic digests:
+
+```bash
+cargo run -q --release --target x86_64-unknown-linux-gnu -p random-smoke -- ring-vectors > /tmp/host.txt
+cargo run -q --release -p random-smoke -- ring-vectors > /tmp/qnx.txt
+diff /tmp/host.txt /tmp/qnx.txt && echo identical
 ```
 
 `std-smoke` and `tokio-smoke` exit non-zero if a required check fails. `net/internet` (DNS + TCP to

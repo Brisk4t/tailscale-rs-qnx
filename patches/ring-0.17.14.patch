@@ -1,0 +1,24 @@
+diff --git a/build.rs b/build.rs
+index 9843ad8..f97f7fd 100644
+--- a/build.rs
++++ b/build.rs
+@@ -252,6 +252,7 @@ const LINUX_ABI: &[&str] = &[
+     "netbsd",
+     "openbsd",
+     "linux",
++    "qnx",
+     "redox",
+     "solaris",
+ ];
+diff --git a/src/rand.rs b/src/rand.rs
+index a451c8f..9192a0d 100644
+--- a/src/rand.rs
++++ b/src/rand.rs
+@@ -137,6 +137,7 @@ impl crate::sealed::Sealed for SystemRandom {}
+     target_os = "linux",
+     target_os = "netbsd",
+     target_os = "openbsd",
++    target_os = "qnx",
+     target_os = "redox",
+     target_os = "solaris",
+     target_os = "vita",

@@ -1,0 +1,12 @@
+[package]
+name = "random-smoke"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# All three getrandom versions in tailscale-rs's graph (ring / rand 0.9 / rand 0.10 + x25519-dalek).
+getrandom02 = { package = "getrandom", version = "=0.2.17" }
+getrandom03 = { package = "getrandom", version = "=0.3.4" }
+getrandom04 = { package = "getrandom", version = "=0.4.3" }
+# ring as used by rustls on QNX (portable C, no asm), drawing randomness from getrandom 0.2.
+ring = "=0.17.14"

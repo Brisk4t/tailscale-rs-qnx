@@ -172,6 +172,38 @@ async fn tasks() -> R {
     Ok(format!("1000 tasks, spawn_blocking on {blocking:?}, mpsc {n} msgs"))
 }
 
+/// tokio::signal on QNX (signal-hook-registry underneath). QNX has no SA_RESTART, so the handler
+/// is installed without it; this checks delivery works and the runtime keeps running.
+async fn signals() -> R {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut usr1 = signal(SignalKind::user_defined1()).map_err(e)?;
+    let mut hup = signal(SignalKind::hangup()).map_err(e)?;
+    let pid = std::process::id() as libc::pid_t;
+    let mut got = 0;
+    for _ in 0..5 {
+        // SAFETY: sending a signal to our own process, for which a handler is installed above.
+        if unsafe { libc::kill(pid, libc::SIGUSR1) } != 0 {
+            return Err(format!("kill: {}", std::io::Error::last_os_error()));
+        }
+        timeout(Duration::from_secs(5), usr1.recv())
+            .await
+            .map_err(|_| format!("SIGUSR1 #{got} not delivered within 5s"))?
+            .ok_or("SIGUSR1 stream closed")?;
+        got += 1;
+    }
+    // A different signal is routed to its own stream only.
+    unsafe { libc::kill(pid, libc::SIGHUP) };
+    timeout(Duration::from_secs(5), hup.recv())
+        .await
+        .map_err(|_| "SIGHUP not delivered within 5s".to_string())?;
+    if timeout(Duration::from_millis(100), usr1.recv()).await.is_ok() {
+        return Err("SIGHUP also woke the SIGUSR1 stream".into());
+    }
+    // The runtime still does I/O and timers after signals (no wedged syscalls).
+    sleep(Duration::from_millis(10)).await;
+    Ok(format!("{got}x SIGUSR1 + SIGHUP delivered via tokio::signal"))
+}
+
 async fn run_checks() -> i32 {
     let mut failed = 0;
     macro_rules! check {
@@ -194,7 +226,8 @@ async fn run_checks() -> i32 {
     check!("tasks", tasks());
     check!("udp-echo", udp_echo());
     check!("tcp-echo", tcp_echo());
-    println!("4 checks, {failed} failures");
+    check!("signals", signals());
+    println!("5 checks, {failed} failures");
     failed
 }
 

@@ -9,9 +9,9 @@ What's here so far (Phase 0):
 |---|---|
 | `smoke/hello` | Hello world for the QNX target |
 | `smoke/std-smoke` | std checks: threads, sync, time, fs, env, panics, TCP/UDP v4+v6, DNS, process, internet |
-| `smoke/tokio-smoke` | tokio checks: timers, tasks, UDP echo (32 clients), 1 MiB TCP echo; also a `serve` mode |
+| `smoke/tokio-smoke` | tokio checks: timers, tasks, UDP echo (32 clients), 1 MiB TCP echo, `tokio::signal`; also a `serve` mode |
 | `smoke/random-smoke` | getrandom 0.2/0.3/0.4 randomness checks, ring crypto checks; `ring-vectors` mode for host-vs-QNX comparison |
-| `patches/` | QNX patches for `mio` 1.2.4, `socket2` 0.6.5, `tokio` 1.53.3, `getrandom` 0.2.17/0.3.4/0.4.3, `ring` 0.17.14 |
+| `patches/` | QNX patches for `mio` 1.2.4, `socket2` 0.6.5, `tokio` 1.54.1, `getrandom` 0.2.17/0.3.4/0.4.3, `ring` 0.17.14, `signal-hook-registry` 1.4.8, `errno` 0.3.14 |
 | `scripts/setup-qnx-crates.sh` | Downloads those crates from crates.io and applies the patches |
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the QNX target and runs it over ssh |
 | `scripts/qnx-target-ip.sh` | Prints the QEMU target's current IP (from the libvirt DHCP lease) |
@@ -57,11 +57,11 @@ source ~/qnx800/qnxsdp-env.sh
 
 ## 2. Patched crates
 
-mio, socket2, tokio, getrandom and ring don't know `target_os = "qnx"` yet. Create the patched forks next to
+mio, socket2, tokio, getrandom, ring, signal-hook-registry and errno don't know `target_os = "qnx"` yet. Create the patched forks next to
 this repo (each `patches/<crate>-<version>.patch` becomes `<crate>-<version>/`):
 
 ```bash
-scripts/setup-qnx-crates.sh          # -> ~/Projects/QNX/qnx-crates/{mio-1.2.4,socket2-0.6.5,tokio-1.53.3,...}
+scripts/setup-qnx-crates.sh          # -> ~/Projects/QNX/qnx-crates/{mio-1.2.4,socket2-0.6.5,tokio-1.54.1,...}
 ```
 
 Each fork is a git repo: one commit with the pristine crates.io source, and the QNX patch left uncommitted,
@@ -139,7 +139,7 @@ Expected output:
 hello from Rust on qnx (x86_64), pid ...
 ...
 13 checks, 0 required failures       # std-smoke
-4 checks, 0 failures                 # tokio-smoke
+5 checks, 0 failures                 # tokio-smoke
 4 checks, 0 failures                 # random-smoke
 ```
 

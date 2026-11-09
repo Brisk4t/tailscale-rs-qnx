@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 # Same versions as tailscale-rs's Cargo.lock, so patches made here carry over.
-tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
-libc = "=0.2.190"
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
+libc = "=0.2.191"
+# Same version as tailscale-rs locks (pulled in by tokio "signal").
+signal-hook-registry = "=1.4.8"
 socket2 = "=0.6.5"

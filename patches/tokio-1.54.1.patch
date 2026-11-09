@@ -27,10 +27,10 @@ index 4f98c0c..cef6207 100644
          )))]
          if let Some(file_type) = self.file_type {
 diff --git a/src/net/unix/ucred.rs b/src/net/unix/ucred.rs
-index 3be73ee..b1c4265 100644
+index 8e2f28f..56cd9ea 100644
 --- a/src/net/unix/ucred.rs
 +++ b/src/net/unix/ucred.rs
-@@ -75,7 +75,7 @@ pub(crate) use self::impl_aix::get_peer_cred;
+@@ -76,7 +76,7 @@ pub(crate) use self::impl_aix::get_peer_cred;
  ))]
  pub(crate) use self::impl_noproc::get_peer_cred;
  
@@ -39,7 +39,7 @@ index 3be73ee..b1c4265 100644
  pub(crate) use self::impl_nto::get_peer_cred;
  
  #[cfg(any(
-@@ -417,7 +417,7 @@ pub(crate) mod impl_noproc {
+@@ -423,7 +423,7 @@ pub(crate) mod impl_noproc {
      }
  }
  
@@ -49,7 +49,7 @@ index 3be73ee..b1c4265 100644
      use crate::net::unix::{self, UnixStream};
  
 diff --git a/src/process/mod.rs b/src/process/mod.rs
-index aa57a9d..87698a4 100644
+index 03f340b..5fea75a 100644
 --- a/src/process/mod.rs
 +++ b/src/process/mod.rs
 @@ -684,7 +684,7 @@ impl Command {

@@ -9,8 +9,10 @@ panic = "abort"
 [patch.crates-io]
 mio = { path = "../qnx-crates/mio-1.2.4" }
 socket2 = { path = "../qnx-crates/socket2-0.6.5" }
-tokio = { path = "../qnx-crates/tokio-1.53.3" }
+tokio = { path = "../qnx-crates/tokio-1.54.1" }
 getrandom02 = { package = "getrandom", path = "../qnx-crates/getrandom-0.2.17" }
 getrandom03 = { package = "getrandom", path = "../qnx-crates/getrandom-0.3.4" }
 getrandom04 = { package = "getrandom", path = "../qnx-crates/getrandom-0.4.3" }
 ring = { path = "../qnx-crates/ring-0.17.14" }
+signal-hook-registry = { path = "../qnx-crates/signal-hook-registry-1.4.8" }
+errno = { path = "../qnx-crates/errno-0.3.14" }

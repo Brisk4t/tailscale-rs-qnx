@@ -2,16 +2,17 @@
 
 Target: a QNX 8.0 program on the tailnet, x86_64 first (QEMU target
 `~/qnxprojects/targets/qemu-qnx800-x86_64`), aarch64 after.
-Source: `~/Projects/tailscale-rs` @ `4d66c5a` (v0.6.1, Rust 2024, pinned 1.98.1).
+Source: `~/Projects/tailscale-rs`, started @ `4d66c5a` (v0.6.1); now tracking v0.7.1 (`a2a56c4` + local
+commits). Rust 2024, pinned 1.98.1.
 
 ## Ecosystem status for `target_os = "qnx"` (checked against the locked crate versions)
 
 | Crate (locked) | Knows `nto` (QNX 7.x) | Knows `qnx` (8.0) | Action |
 |---|---|---|---|
-| `libc` 0.2.190 | yes | **yes** | none |
+| `libc` 0.2.191 | yes | **yes** | none |
 | `cc` 1.8.0 | – | **yes** | none |
 | `mio` 1.2.4 | yes (poll(2) backend) | no | patch: treat `qnx` like `nto` (**critical**, it's tokio's event loop) |
-| `tokio` 1.53.3 | yes (ucred, read_dir, process) | no | patch |
+| `tokio` 1.54.1 | yes (ucred, read_dir, process) | no | patch |
 | `socket2` 0.6.5 | yes | no | patch |
 | `getrandom` 0.2.17 / 0.3.4 / 0.4.3 | yes | no | patch all three (three versions in the tree) |
 | `rustix` 1.1.5 | yes (30 files) | no | patch, or check whether it can be dropped from the qnx build |
@@ -80,7 +81,7 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
   - `--ssh-ident=~/.ssh/id_ed25519.pub` for root key login.
   - Boot headless: `./mkqnximage-wrapper.sh --run=-h` (console goes to `output/qemu.out`).
   - The data partition is only 61 MB, so deploy stripped binaries.
-- **libc 0.2.190 models `target_os = "qnx"` as `nto` + the io-sock branch** (it shares `src/unix/nto`), so the
+- **libc 0.2.190+ models `target_os = "qnx"` as `nto` + the io-sock branch** (it shares `src/unix/nto`), so the
   crate rule is: add `qnx` wherever `nto` appears, and send `qnx` down the `nto71_iosock` side of any
   `nto70`/`nto71` split. `scripts/add-qnx-cfg.py` does the mechanical part and flags `all(target_os = "nto", …)`
   sites for manual review.
@@ -97,7 +98,7 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
 
 - [ ] Fork the crates above into `~/Projects/QNX/qnx-crates/` at the **exact locked versions** and wire them up
       with `[patch.crates-io]`.
-      → Started in Phase 0: `mio-1.2.4`, `socket2-0.6.5`, `tokio-1.53.3` (each a git repo: pristine crates.io
+      → Started in Phase 0: `mio-1.2.4`, `socket2-0.6.5`, `tokio-1.54.1` (each a git repo: pristine crates.io
       commit + uncommitted QNX diff, `git diff` = the upstream patch). Wired into this repo's `Cargo.toml`;
       tailscale-rs: `[patch.crates-io]` (absolute paths) is in its local `.cargo/config.toml`, so `Cargo.toml`
       stays clean (`Cargo.lock` does change, don't commit it). With `-Zbuild-std`, cargo prints
@@ -111,8 +112,10 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
 - [ ] **mio**: add `qnx` to every `nto` cfg (poll selector, `net.rs` socket flags). Run mio's tests on target.
       → cfgs done (7 files, +23/−4), exercised by `tokio-smoke`; mio's own test suite not yet run on target.
 - [ ] **tokio**: `ucred` (peer creds), `read_dir`, `process`. Only the `net`, `time`, `rt`, `sync` features matter for us.
-      → done (3 files). `qnx` uses `impl_nto` (`getpeereid`) for ucred; it's deliberately *not* added to
-      `impl_netbsd`, which needs NetBSD's `LOCAL_PEEREID` (QNX 8 headers only have FreeBSD `LOCAL_PEERCRED`).
+      → done (3 files), now at **1.54.1** (what tailscale-rs v0.7.1 locks; the 1.53.3 fork was dropped). `qnx`
+      uses `impl_nto` (`getpeereid`) for ucred. 1.53.3 also compiled `impl_netbsd` (NetBSD `LOCAL_PEEREID`, absent
+      from QNX 8's FreeBSD-style headers) for `nto`; 1.54.1 limits it to netbsd, so the patch is purely additive.
+      With it, `ts_tls_util` (ring provider) builds for QNX in tailscale-rs.
 - [ ] **socket2**: → cfgs done (4 files); the two `all(target_os = "nto", any(nto70, nto71))` `TCP_KEEPALIVE`
       sites correctly stay io-pkt-only, so `qnx` gets `TCP_KEEPIDLE`.
 - [x] **getrandom** 0.2.17 / 0.3.4 / 0.4.3, all three in the QNX graph: 0.2 ← ring, 0.3 ← rand 0.9,
@@ -122,7 +125,20 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
       `__get_errno_ptr` for errno. 0.3/0.4 also need `qnx` in the `Cargo.toml` target table that pulls in
       `libc` (the `.rs`-only script misses manifests). Validated on target by `smoke/random-smoke`: 10k unique
       32-byte draws, bit balance, byte-histogram χ², from 4 threads, per version.
-- [ ] **errno / rustix**: same pattern (not hit yet).
+- [x] **signal-hook-registry 1.4.8** (via tokio's `signal` feature, which tokio pulls in for hyper-util →
+      ts_http_util → ts_control/ts_derp/ts_netcheck, so it can't be dropped): failed on `libc::SA_RESTART`.
+      QNX 8's `<signal.h>` has `/* #define SA_RESTART 0x0040 (not supported yet) */`, so the OS has no
+      `SA_RESTART` and adding it to `libc` would be wrong. The crate's existing `nto` branch installs the
+      handler with `flags = 0`; `qnx` now takes it too (2 lines).
+      **Consequence:** with no `SA_RESTART`, a blocking syscall interrupted by a handled signal returns `EINTR`
+      instead of restarting. std's `read_exact`/`write_all` and tokio/mio already retry on `Interrupted`, but
+      any raw blocking call in tailscale-rs (or FFI users) must handle `EINTR`. Watch for it in Phase 3.
+- [x] **errno 0.3.14** (dependency of signal-hook-registry): the `extern "C"` errno accessor is linked as
+      `__get_errno_ptr` only on `nto`; on `qnx` it linked as `errno_location`, which doesn't exist (link-time
+      failure only, so it built fine until a binary was linked). 1 line.
+      Validated by `tokio-smoke`'s `signals` check on target: 5× SIGUSR1 + SIGHUP delivered via
+      `tokio::signal`, delivered to the right stream, runtime still healthy, debug and release.
+- [ ] **rustix**: same pattern (not hit yet).
 - [ ] **TLS crypto**: add a `ring` feature to `ts_tls_util` (`tokio-rustls` `ring` feature;
       `insecure.rs` uses `rustls::crypto::aws_lc_rs::default_provider()` → make the provider selectable).
       `ring` 0.17 builds through `cc`, which already knows `qnx`. Later, optionally get `aws-lc-sys`
@@ -150,8 +166,8 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
       the Linux host exactly in debug and release (QEMU `--cpu host` → same AVX2/AES-NI paths).
       ring's own test suite wasn't run: the crates.io package omits its test vectors.
       With these, `ring`, `rustls`, `rand` 0.9/0.10 and `x25519-dalek` build for QNX inside tailscale-rs.
-      Next blocker for `tokio-rustls`/`ts_tls_util`: tokio 1.54.1 (needs re-fork; tailscale-rs moved to v0.7.1)
-      and `signal-hook-registry` (`SA_RESTART`).
+      Next blocker for `tokio-rustls`/`ts_tls_util`: tokio 1.54.1 (needs re-fork; tailscale-rs moved to v0.7.1).
+      `signal-hook-registry` is fixed (see below).
 - [ ] Verify ABI-sensitive bits against QNX 8.0 headers in `~/qnx800/target/qnx/usr/include`
       (`sockaddr` layouts, `msghdr`, `IP_PKTINFO`/`IP_RECVDSTADDR`, `SO_REUSEPORT`, `MSG_*` flags) wherever the crates' `nto` code
       assumed 7.x/io-pkt.

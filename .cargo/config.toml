@@ -1,0 +1,16 @@
+[build]
+target = "x86_64-pc-qnx"
+
+[target.x86_64-pc-qnx]
+linker = "qcc"
+runner = "scripts/qnx-run.sh"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+CC_x86_64_pc_qnx = "qcc"
+CFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64"
+CXX_x86_64_pc_qnx = "q++"
+CXXFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64_cxx"
+AR_x86_64_pc_qnx = "ntox86_64-ar"

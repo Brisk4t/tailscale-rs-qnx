@@ -1,0 +1,221 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 30eedd6..2d6bb81 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -450,6 +450,7 @@ pub struct TcpKeepalive {
+         target_os = "redox",
+         target_os = "solaris",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "vita",
+         target_os = "haiku",
+@@ -461,6 +462,7 @@ pub struct TcpKeepalive {
+         target_os = "redox",
+         target_os = "solaris",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "vita",
+         target_os = "haiku",
+@@ -480,6 +482,7 @@ impl TcpKeepalive {
+                 target_os = "redox",
+                 target_os = "solaris",
+                 target_os = "nto",
++                target_os = "qnx",
+                 target_os = "espidf",
+                 target_os = "vita",
+                 target_os = "haiku",
+@@ -491,6 +494,7 @@ impl TcpKeepalive {
+                 target_os = "redox",
+                 target_os = "solaris",
+                 target_os = "nto",
++                target_os = "qnx",
+                 target_os = "espidf",
+                 target_os = "vita",
+                 target_os = "haiku",
+diff --git a/src/sockaddr.rs b/src/sockaddr.rs
+index 120a546..f7e56a2 100644
+--- a/src/sockaddr.rs
++++ b/src/sockaddr.rs
+@@ -371,6 +371,7 @@ impl From<SocketAddrV4> for SockAddr {
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "nto",
++            target_os = "qnx",
+             target_os = "openbsd",
+             target_os = "tvos",
+             target_os = "vxworks",
+@@ -415,6 +416,7 @@ impl From<SocketAddrV6> for SockAddr {
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "nto",
++            target_os = "qnx",
+             target_os = "openbsd",
+             target_os = "tvos",
+             target_os = "vxworks",
+@@ -440,6 +442,7 @@ impl fmt::Debug for SockAddr {
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "nto",
++            target_os = "qnx",
+             target_os = "openbsd",
+             target_os = "tvos",
+             target_os = "vxworks",
+diff --git a/src/socket.rs b/src/socket.rs
+index da01a77..24f0134 100644
+--- a/src/socket.rs
++++ b/src/socket.rs
+@@ -11,7 +11,7 @@ use std::io::{self, Read, Write};
+ #[cfg(not(any(target_os = "redox", target_os = "wasi", target_os = "horizon")))]
+ use std::io::{IoSlice, IoSliceMut};
+ use std::mem::MaybeUninit;
+-#[cfg(not(any(target_os = "nto", target_os = "nuttx")))]
++#[cfg(not(any(target_os = "nto", target_os = "qnx", target_os = "nuttx")))]
+ use std::net::Ipv6Addr;
+ use std::net::{self, Ipv4Addr, Shutdown};
+ #[cfg(any(unix, all(target_os = "wasi", not(target_env = "p1"))))]
+@@ -1352,6 +1352,7 @@ impl Socket {
+         target_os = "redox",
+         target_os = "solaris",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "vita",
+         target_os = "cygwin",
+@@ -1388,6 +1389,7 @@ impl Socket {
+         target_os = "redox",
+         target_os = "solaris",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "vita",
+         target_os = "cygwin",
+@@ -1426,6 +1428,7 @@ impl Socket {
+         target_os = "redox",
+         target_os = "fuchsia",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "vita",
+         target_os = "wasi",
+@@ -1466,6 +1469,7 @@ impl Socket {
+         target_os = "redox",
+         target_os = "fuchsia",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "vita",
+         target_os = "wasi",
+@@ -1687,6 +1691,7 @@ impl Socket {
+         target_os = "solaris",
+         target_os = "haiku",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "nuttx",
+         target_os = "vita",
+@@ -1722,6 +1727,7 @@ impl Socket {
+         target_os = "solaris",
+         target_os = "haiku",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "espidf",
+         target_os = "nuttx",
+         target_os = "vita",
+@@ -1870,7 +1876,7 @@ impl Socket {
+     /// This function specifies a new multicast group for this socket to join.
+     /// The address must be a valid multicast address, and `interface` is the
+     /// index of the interface to join/leave (or 0 to indicate any interface).
+-    #[cfg(not(any(target_os = "nto", target_os = "nuttx")))]
++    #[cfg(not(any(target_os = "nto", target_os = "qnx", target_os = "nuttx")))]
+     pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> io::Result<()> {
+         let mreq = sys::Ipv6Mreq {
+             ipv6mr_multiaddr: sys::to_in6_addr(multiaddr),
+@@ -1894,7 +1900,7 @@ impl Socket {
+     /// For more information about this option, see [`join_multicast_v6`].
+     ///
+     /// [`join_multicast_v6`]: Socket::join_multicast_v6
+-    #[cfg(not(any(target_os = "nto", target_os = "nuttx")))]
++    #[cfg(not(any(target_os = "nto", target_os = "qnx", target_os = "nuttx")))]
+     pub fn leave_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> io::Result<()> {
+         let mreq = sys::Ipv6Mreq {
+             ipv6mr_multiaddr: sys::to_in6_addr(multiaddr),
+diff --git a/src/sys/unix.rs b/src/sys/unix.rs
+index a226fe1..92b2996 100644
+--- a/src/sys/unix.rs
++++ b/src/sys/unix.rs
+@@ -135,7 +135,7 @@ pub(crate) use libc::MSG_TRUNC;
+ #[cfg(not(any(target_os = "redox", target_os = "wasi")))]
+ pub(crate) use libc::SO_OOBINLINE;
+ // Used in `Socket`.
+-#[cfg(not(any(target_os = "nto", target_os = "nuttx")))]
++#[cfg(not(any(target_os = "nto", target_os = "qnx", target_os = "nuttx")))]
+ pub(crate) use libc::ipv6_mreq as Ipv6Mreq;
+ #[cfg(all(feature = "all", target_os = "linux"))]
+ pub(crate) use libc::IPV6_HDRINCL;
+@@ -199,6 +199,7 @@ pub(crate) use libc::IP_HDRINCL;
+     target_os = "haiku",
+     target_os = "hurd",
+     target_os = "nto",
++    target_os = "qnx",
+     target_os = "espidf",
+     target_os = "nuttx",
+     target_os = "vita",
+@@ -253,6 +254,7 @@ pub(crate) use libc::{
+     target_os = "redox",
+     target_os = "fuchsia",
+     target_os = "nto",
++    target_os = "qnx",
+     target_os = "espidf",
+     target_os = "vita",
+     target_os = "wasi",
+@@ -271,6 +273,7 @@ pub(crate) use libc::{
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "nto",
++    target_os = "qnx",
+     target_os = "openbsd",
+     target_os = "solaris",
+     target_os = "tvos",
+@@ -427,6 +430,7 @@ type IovLen = usize;
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "nto",
++    target_os = "qnx",
+     target_os = "openbsd",
+     target_os = "solaris",
+     target_os = "tvos",
+@@ -1278,6 +1282,7 @@ pub(crate) fn set_tcp_keepalive(fd: RawSocket, keepalive: &TcpKeepalive) -> io::
+         target_os = "haiku",
+         target_os = "openbsd",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "vita"
+     )))]
+     if let Some(time) = keepalive.time {
+@@ -1316,7 +1321,7 @@ pub(crate) fn set_tcp_keepalive(fd: RawSocket, keepalive: &TcpKeepalive) -> io::
+         }
+     }
+ 
+-    #[cfg(target_os = "nto")]
++    #[cfg(any(target_os = "nto", target_os = "qnx"))]
+     if let Some(time) = keepalive.time {
+         let secs = into_timeval(Some(time));
+         unsafe { setsockopt(fd, libc::IPPROTO_TCP, KEEPALIVE_TIME, secs)? }
+@@ -1329,6 +1334,7 @@ pub(crate) fn set_tcp_keepalive(fd: RawSocket, keepalive: &TcpKeepalive) -> io::
+     target_os = "haiku",
+     target_os = "openbsd",
+     target_os = "nto",
++    target_os = "qnx",
+     target_os = "vita"
+ )))]
+ fn into_secs(duration: Duration) -> c_int {
+@@ -1435,6 +1441,7 @@ pub(crate) fn from_in6_addr(addr: in6_addr) -> Ipv6Addr {
+     target_os = "redox",
+     target_os = "solaris",
+     target_os = "nto",
++    target_os = "qnx",
+     target_os = "espidf",
+     target_os = "vita",
+     target_os = "cygwin",

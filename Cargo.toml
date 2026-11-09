@@ -7,6 +7,6 @@ panic = "abort"
 
 # QNX 8.0 (`target_os = "qnx"`) forks at the exact versions tailscale-rs locks.
 [patch.crates-io]
-mio = { path = "../../qnx-crates/mio-1.2.4" }
-socket2 = { path = "../../qnx-crates/socket2-0.6.5" }
-tokio = { path = "../../qnx-crates/tokio-1.53.3" }
+mio = { path = "../qnx-crates/mio-1.2.4" }
+socket2 = { path = "../qnx-crates/socket2-0.6.5" }
+tokio = { path = "../qnx-crates/tokio-1.53.3" }

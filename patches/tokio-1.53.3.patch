@@ -1,0 +1,72 @@
+diff --git a/src/fs/read_dir.rs b/src/fs/read_dir.rs
+index 4f98c0c..cef6207 100644
+--- a/src/fs/read_dir.rs
++++ b/src/fs/read_dir.rs
+@@ -141,6 +141,7 @@ impl ReadDir {
+                     target_os = "vxworks",
+                     target_os = "aix",
+                     target_os = "nto",
++                    target_os = "qnx",
+                     target_os = "vita",
+                 )))]
+                 file_type: std.file_type().ok(),
+@@ -205,6 +206,7 @@ pub struct DirEntry {
+         target_os = "vxworks",
+         target_os = "aix",
+         target_os = "nto",
++        target_os = "qnx",
+         target_os = "vita",
+     )))]
+     file_type: Option<FileType>,
+@@ -339,6 +341,7 @@ impl DirEntry {
+             target_os = "vxworks",
+             target_os = "aix",
+             target_os = "nto",
++            target_os = "qnx",
+             target_os = "vita",
+         )))]
+         if let Some(file_type) = self.file_type {
+diff --git a/src/net/unix/ucred.rs b/src/net/unix/ucred.rs
+index 3be73ee..b1c4265 100644
+--- a/src/net/unix/ucred.rs
++++ b/src/net/unix/ucred.rs
+@@ -75,7 +75,7 @@ pub(crate) use self::impl_aix::get_peer_cred;
+ ))]
+ pub(crate) use self::impl_noproc::get_peer_cred;
+ 
+-#[cfg(target_os = "nto")]
++#[cfg(any(target_os = "nto", target_os = "qnx"))]
+ pub(crate) use self::impl_nto::get_peer_cred;
+ 
+ #[cfg(any(
+@@ -417,7 +417,7 @@ pub(crate) mod impl_noproc {
+     }
+ }
+ 
+-#[cfg(target_os = "nto")]
++#[cfg(any(target_os = "nto", target_os = "qnx"))]
+ pub(crate) mod impl_nto {
+     use crate::net::unix::{self, UnixStream};
+ 
+diff --git a/src/process/mod.rs b/src/process/mod.rs
+index aa57a9d..87698a4 100644
+--- a/src/process/mod.rs
++++ b/src/process/mod.rs
+@@ -684,7 +684,7 @@ impl Command {
+     #[cfg(unix)]
+     #[cfg_attr(docsrs, doc(cfg(unix)))]
+     pub fn uid(&mut self, id: u32) -> &mut Command {
+-        #[cfg(target_os = "nto")]
++        #[cfg(any(target_os = "nto", target_os = "qnx"))]
+         let id = id as i32;
+         self.std.uid(id);
+         self
+@@ -695,7 +695,7 @@ impl Command {
+     #[cfg(unix)]
+     #[cfg_attr(docsrs, doc(cfg(unix)))]
+     pub fn gid(&mut self, id: u32) -> &mut Command {
+-        #[cfg(target_os = "nto")]
++        #[cfg(any(target_os = "nto", target_os = "qnx"))]
+         let id = id as i32;
+         self.std.gid(id);
+         self

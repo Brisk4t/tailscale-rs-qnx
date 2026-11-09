@@ -95,7 +95,7 @@ Exit: an async Rust binary built on the host runs on QNX. ✅
 
 ## Phase 1: Ecosystem patches (3–5 days)
 
-- [ ] Fork the crates above into `~/Projects/qnx-crates/` at the **exact locked versions** and wire them up
+- [ ] Fork the crates above into `~/Projects/QNX/qnx-crates/` at the **exact locked versions** and wire them up
       with `[patch.crates-io]`.
       → Started in Phase 0: `mio-1.2.4`, `socket2-0.6.5`, `tokio-1.53.3` (each a git repo: pristine crates.io
       commit + uncommitted QNX diff, `git diff` = the upstream patch). Wired into this repo's `Cargo.toml`;

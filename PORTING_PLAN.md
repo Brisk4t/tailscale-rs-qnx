@@ -1,270 +1,217 @@
-# Porting Tailscale to QNX OS 8.0 (via tailscale-rs)
+# Porting tailscale-rs to QNX 8.0
 
-Target: a QNX 8.0 program on the tailnet, x86_64 first (QEMU target
-`~/qnxprojects/targets/qemu-qnx800-x86_64`), aarch64 after.
-Source: `~/Projects/tailscale-rs`, started @ `4d66c5a` (v0.6.1); now tracking v0.7.1 (`a2a56c4` + local
-commits). Rust 2024, pinned 1.98.1.
+**Goal:** a QNX 8.0 program on a tailnet. x86_64 first, on the QEMU target
+`~/qnxprojects/targets/qemu-qnx800-x86_64`; aarch64 later.
 
-## Ecosystem status for `target_os = "qnx"` (checked against the locked crate versions)
+**Source:** `~/Projects/tailscale-rs` at v0.7.1 (`a2a56c4`) plus local commits.
 
-| Crate (locked) | Knows `nto` (QNX 7.x) | Knows `qnx` (8.0) | Action |
-|---|---|---|---|
-| `libc` 0.2.191 | yes | **yes** | none |
-| `cc` 1.8.0 | – | **yes** | none |
-| `mio` 1.2.4 | yes (poll(2) backend) | no | patch: treat `qnx` like `nto` (**critical**, it's tokio's event loop) |
-| `tokio` 1.54.1 | yes (ucred, read_dir, process) | no | patch |
-| `socket2` 0.6.5 | yes | no | patch |
-| `getrandom` 0.2.17 / 0.3.4 / 0.4.3 | yes | no | patch all three (three versions in the tree) |
-| `rustix` 1.1.5 | yes (30 files) | no | patch, or check whether it can be dropped from the qnx build |
-| `errno` 0.3.14 | yes | no | patch |
-| `gethostname` 1.1.0 | – | – | probably generic unix; verify |
-| `aws-lc-sys` 0.46.0 | – | – | C/CMake cross-build for QNX is the **biggest unknown**; avoid by switching rustls to `ring` |
-| `rtnetlink`, `windows` | – | – | already cfg-gated to linux/windows |
+**What you get:** tailscale-rs is a library, like Go's `tsnet`. A QNX process embeds it and opens TCP/UDP
+sockets on the tailnet through a userspace network stack (smoltcp). It is not a system-wide VPN; that's a
+stretch goal (Phase 5). C/C++ apps can use it through `ts_ffi`.
 
-Most patches are mechanical (`target_os = "nto"` → `any(target_os = "nto", target_os = "qnx")`).
-Where a crate branches on `target_env = "nto71_iosock"`, QNX 8.0 should take the **io-sock**
-branch, because 8.0 only has io-sock. Each one is a small upstream PR, likely welcome since `libc`
-already supports `qnx`.
+How to build and run everything: [README.md](README.md).
 
 ---
 
-## Phase 0: Rust toolchain for QNX 8.0 (1–2 days) ✅ done 2026-11-09
+## Status
 
-- [x] `rustup toolchain install nightly --component rust-src`, then **pin a dated nightly** once it works
-      (tier-3 targets can break from one nightly to the next). The repo's `rust-toolchain.toml` pins 1.98.1,
-      so use `cargo +nightly-YYYY-MM-DD` or a local override.
-      → Pinned **`nightly-2026-11-09`** (rustc 1.102.0-nightly `5b7b37aef`). This repo's `rust-toolchain.toml`
-      selects it; in tailscale-rs use `cargo +nightly-2026-11-09`.
-- [x] `~/Projects/tailscale-rs/.cargo/config.toml` (local, not committed upstream; listed in `.git/info/exclude`).
-      Same as this repo's `.cargo/config.toml` minus `[build] target`:
-      ```toml
-      [target.x86_64-pc-qnx]
-      linker = "qcc"
-      runner = "/home/atharva/Projects/QNX/tailscale-QNX/scripts/qnx-run.sh"
+| Phase | Estimate | Status |
+|---|---|---|
+| 0. Rust toolchain for QNX | 1–2 days | ✅ Done 2026-11-09 |
+| 1. Patch the crate ecosystem | 3–5 days | ✅ Exit reached 2026-11-09 (2 follow-ups open) |
+| 2. tailscale-rs changes for QNX | 3–5 days | Not started |
+| 3. Validate on the QEMU target | 2–3 days | **In progress.** First end-to-end echo over the tailnet on 2026-11-10 |
+| 4. QNX developer integration | 2–4 days | Not started |
+| 5. Stretch goals | – | Not started |
 
-      [unstable]
-      build-std = ["std", "panic_abort"]
+### Works on QNX today
 
-      [env]
-      CC_x86_64_pc_qnx = "qcc"
-      CFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64"
-      CXX_x86_64_pc_qnx = "q++"
-      CXXFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64_cxx"
-      AR_x86_64_pc_qnx = "ntox86_64-ar"
-      ```
-      (Always `source ~/qnx800/qnxsdp-env.sh` first.) No `-C link-arg=-Vgcc_ntox86_64` rustflag: the rustc
-      target spec already passes `-Vgcc_ntox86_64_cxx` to qcc. Sanity check: `ts_bart` cross-builds.
-- [x] Hello world → copy to the QEMU target → runs (`cargo run -p hello`).
-- [x] std smoke test on target (`smoke/std-smoke`): threads, Mutex/Condvar/mpsc, `Instant`/`SystemTime`/sleep,
-      fs (write/append/rename/chmod/symlink/read_dir/canonicalize), env, `catch_unwind` + thread panics,
-      TCP/UDP loopback on v4 **and v6**, non-blocking `WouldBlock`, DNS, `Command`, and outbound
-      DNS + TCP to `controlplane.tailscale.com:443`. 13/13 pass in debug and release (`panic=abort`).
-- [x] tokio smoke test (`smoke/tokio-smoke`, multi-thread `#[tokio::main]`): timers/interval/timeout, 1000 tasks,
-      `spawn_blocking`, mpsc, UDP echo server with 32 concurrent clients × 100 round trips, 1 MiB TCP echo.
-      4/4 pass in debug and release. `tokio-smoke serve 0.0.0.0:9999` + `scripts/udp-echo-client.py` from the
-      host: 2000/2000 datagrams over virbr0, RTT p50 0.83 ms / p99 2.7 ms.
-      Needed patched **mio, socket2 and tokio** (pulled forward from Phase 1, see below).
+- Release `examples/tcp_echo` on the QEMU VM:
+  - logs in to `controlplane.tailscale.com`
+  - gets a tailnet address (100.77.109.107)
+  - echoes `nc` input from a macOS peer over DERP
+- That exercises TLS (ring), the control channel, DERP, WireGuard (`ts_tunnel`) and the smoltcp stack.
+- All five smoke tests pass on the target in debug and release: `hello`, `std-smoke`, `tokio-smoke`,
+  `random-smoke` and `rustix-smoke`.
 
-Exit: an async Rust binary built on the host runs on QNX. ✅
+---
 
-### Phase 0 notes / findings
+## Open issues
 
-- **Workflow**: `source ~/qnx800/qnxsdp-env.sh && cargo run -p <smoke-crate>` in this repo. The cargo runner
-  `scripts/qnx-run.sh` strips the binary, scp's it to `/data/home/root/bin/` and runs it over ssh
-  (exit code and args are forwarded; `QNX_HOST_IP` / `QNX_USER` override). `scripts/qnx-target-ip.sh` reads the
-  VM's current address from the libvirt DHCP lease (it changes on every boot).
-- **Target image fixes** (in `~/qnxprojects/targets/qemu-qnx800-x86_64/local/`):
-  - sshd didn't start (`/usr/libexec/sshd-auth does not exist`): the SDP's OpenSSH needs `sshd-auth` but
-    mkqnximage's `system.build` template only ships `sshd-session`. Added `bin/sshd-auth=usr/libexec/sshd-auth`
-    to `snippets/system_files.custom` and an IFS link `/usr/libexec/sshd-auth=/system/bin/sshd-auth` to
-    `snippets/ifs_files.custom`.
-  - `--ssh-ident=~/.ssh/id_ed25519.pub` for root key login.
-  - Boot headless: `./mkqnximage-wrapper.sh --run=-h` (console goes to `output/qemu.out`).
-  - The data partition is only 61 MB, so deploy stripped binaries.
-- **libc 0.2.190+ models `target_os = "qnx"` as `nto` + the io-sock branch** (it shares `src/unix/nto`), so the
-  crate rule is: add `qnx` wherever `nto` appears, and send `qnx` down the `nto71_iosock` side of any
-  `nto70`/`nto71` split. `scripts/add-qnx-cfg.py` does the mechanical part and flags `all(target_os = "nto", …)`
-  sites for manual review.
-- **UDP receive buffers are small on io-sock**: `net.inet.udp.recvspace = 42080` (FreeBSD default; Linux uses
-  208 KiB). Each queued datagram is charged a full mbuf cluster, so a socket holds only about 20 before
-  `netstat -s -p udp` shows "dropped due to full socket buffers". 32 concurrent UDP clients lost packets until
-  the server set `SO_RCVBUF = 1 MiB`. The effective cap is just under `kern.ipc.maxsockbuf` (2 MiB → `ENOBUFS`).
-  **Open item for Phase 3**: at 128+ concurrent loopback clients there are still about 3 drops per run, even
-  with 1 MiB on server *and* clients and with 256 KiB vs 1 MiB making no difference, so some other io-sock limit
-  is involved. mio isn't losing wakeups (every loss shows up in the kernel counter). tailscale-rs's
-  magicsock/WireGuard socket should set a large `SO_RCVBUF` on QNX; check what it does today.
+| # | Issue | Impact | Cause | Next step |
+|---|---|---|---|---|
+| 1 | **Interactive login exits with `410 Gone`** (`auth path not found`) after the URL is approved | First run dies; a rerun with the saved `tsrs_keys.json` works | Probably upstream: the follow-up long-poll fails | Repeat on the Linux host build. If it fails there too, report upstream |
+| 2 | **One `nc` attempt dropped** with `ts_tunnel: session not found` | Peer's TCP connection hangs; a later attempt worked | Unknown: stale session after a restart, or a replaced handshake | Watch for it with `RUST_LOG=ts_tunnel=debug` |
+| 3 | **No network monitor on QNX** | No LAN endpoints advertised (STUN only); network changes go unnoticed | `ts_netmon` has no QNX backend; `platform_mon()` returns `None` and the runtime skips it | Phase 2 |
+| 4 | **`tailscale ping` gets no reply over DERP** | Can't ping-check the node until there's a direct path | Upstream: `ts_runtime::disco` only answers pings that arrive over UDP | None needed. Use `nc` |
+| 5 | **UDP drops under load** | Possible WireGuard packet loss at high rates | io-sock's default UDP receive buffer is 42 KB. 1 MiB fixed 32 clients, but 128+ still drop about 3 per run | Check what tailscale-rs's UDP sockets set. Measure throughput |
+| 6 | **No `SA_RESTART`** on QNX 8 | Blocking syscalls interrupted by a signal return `EINTR` | OS limitation | std and tokio retry; audit raw calls and FFI users |
+| 7 | **ABI not reviewed** | Wrong constants or struct layouts would compile and fail at runtime | The forks reuse code written for QNX 7 (`nto`) | Check `sockaddr`, `msghdr`, `IP_PKTINFO`, `SO_REUSEPORT` and `MSG_*` against `~/qnx800/target/qnx/usr/include` |
+| 8 | **mio's own tests not run on target** | mio is only covered indirectly, by `tokio-smoke` | – | Run them through `scripts/qnx-run.sh` |
+| 9 | **Debug binaries are too big** | Debug examples are 319 MB, 42 MB stripped, against a 61 MB `/data` | – | Deploy release builds |
 
-## Phase 1: Ecosystem patches (3–5 days)
+---
 
-- [ ] Fork the crates above into `~/Projects/QNX/qnx-crates/` at the **exact locked versions** and wire them up
-      with `[patch.crates-io]`.
-      → Started in Phase 0: `mio-1.2.4`, `socket2-0.6.5`, `tokio-1.54.1` (each a git repo: pristine crates.io
-      commit + uncommitted QNX diff, `git diff` = the upstream patch). Wired into this repo's `Cargo.toml`;
-      tailscale-rs: `[patch.crates-io]` (absolute paths) is in its local `.cargo/config.toml`, so `Cargo.toml`
-      stays clean (`Cargo.lock` does change, don't commit it). With `-Zbuild-std`, cargo prints
-      `warning: patch ... was not used in the crate graph` for every config-level patch. It's spurious: cargo
-      also resolves the std library graph, applies config patches there too, and std doesn't use them.
-      `cargo tree -i mio` and `cargo build -v` confirm the forks are what's compiled.
-      First `-p tailscale --examples` build stops at **`aws-lc-sys`** (expected) and **`signal-hook-registry`**
-      (`libc::SA_RESTART` missing for qnx; pulled in by tokio's `signal` feature).
-- [ ] Discovery loop:
-      `cargo +nightly build --target x86_64-pc-qnx -p tailscale --examples`. Fix the next failing crate, repeat.
-- [ ] **mio**: add `qnx` to every `nto` cfg (poll selector, `net.rs` socket flags). Run mio's tests on target.
-      → cfgs done (7 files, +23/−4), exercised by `tokio-smoke`; mio's own test suite not yet run on target.
-- [ ] **tokio**: `ucred` (peer creds), `read_dir`, `process`. Only the `net`, `time`, `rt`, `sync` features matter for us.
-      → done (3 files), now at **1.54.1** (what tailscale-rs v0.7.1 locks; the 1.53.3 fork was dropped). `qnx`
-      uses `impl_nto` (`getpeereid`) for ucred. 1.53.3 also compiled `impl_netbsd` (NetBSD `LOCAL_PEEREID`, absent
-      from QNX 8's FreeBSD-style headers) for `nto`; 1.54.1 limits it to netbsd, so the patch is purely additive.
-      With it, `ts_tls_util` (ring provider) builds for QNX in tailscale-rs.
-- [ ] **socket2**: → cfgs done (4 files); the two `all(target_os = "nto", any(nto70, nto71))` `TCP_KEEPALIVE`
-      sites correctly stay io-pkt-only, so `qnx` gets `TCP_KEEPIDLE`.
-- [x] **getrandom** 0.2.17 / 0.3.4 / 0.4.3, all three in the QNX graph: 0.2 ← ring, 0.3 ← rand 0.9,
-      0.4 ← rand 0.10 + x25519-dalek (WireGuard/Noise keys). QNX 8's libc has **no** `getrandom`,
-      `getentropy` or `arc4random`, so `qnx` takes the `nto` path: the `use_file` backend reading
-      `/dev/urandom` (served by QNX's `random` resmgr, seeded from `/data/var/random/rnd-seed`), with
-      `__get_errno_ptr` for errno. 0.3/0.4 also need `qnx` in the `Cargo.toml` target table that pulls in
-      `libc` (the `.rs`-only script misses manifests). Validated on target by `smoke/random-smoke`: 10k unique
-      32-byte draws, bit balance, byte-histogram χ², from 4 threads, per version.
-- [x] **signal-hook-registry 1.4.8** (via tokio's `signal` feature, which tokio pulls in for hyper-util →
-      ts_http_util → ts_control/ts_derp/ts_netcheck, so it can't be dropped): failed on `libc::SA_RESTART`.
-      QNX 8's `<signal.h>` has `/* #define SA_RESTART 0x0040 (not supported yet) */`, so the OS has no
-      `SA_RESTART` and adding it to `libc` would be wrong. The crate's existing `nto` branch installs the
-      handler with `flags = 0`; `qnx` now takes it too (2 lines).
-      **Consequence:** with no `SA_RESTART`, a blocking syscall interrupted by a handled signal returns `EINTR`
-      instead of restarting. std's `read_exact`/`write_all` and tokio/mio already retry on `Interrupted`, but
-      any raw blocking call in tailscale-rs (or FFI users) must handle `EINTR`. Watch for it in Phase 3.
-- [x] **errno 0.3.14** (dependency of signal-hook-registry): the `extern "C"` errno accessor is linked as
-      `__get_errno_ptr` only on `nto`; on `qnx` it linked as `errno_location`, which doesn't exist (link-time
-      failure only, so it built fine until a binary was linked). 1 line.
-      Validated by `tokio-smoke`'s `signals` check on target: 5× SIGUSR1 + SIGHUP delivered via
-      `tokio::signal`, delivered to the right stream, runtime still healthy, debug and release.
-- [ ] **rustix**: same pattern (not hit yet).
-- [ ] **TLS crypto**: add a `ring` feature to `ts_tls_util` (`tokio-rustls` `ring` feature;
-      `insecure.rs` uses `rustls::crypto::aws_lc_rs::default_provider()` → make the provider selectable).
-      `ring` 0.17 builds through `cc`, which already knows `qnx`. Later, optionally get `aws-lc-sys`
-      cross-building via a CMake toolchain file for qcc.
-      → Done in tailscale-rs (uncommitted, `crates/utils/ts_tls_util`): `tokio-rustls` gets `aws-lc-rs` on
-      `cfg(not(target_os = "qnx"))` and `ring` on `cfg(target_os = "qnx")` (target-specific deps; resolver 3
-      doesn't unify features across targets). A `CRYPTO_PROVIDER` static picks the matching provider and is
-      passed via `ClientConfig::builder_with_provider`, in `connect_alpn` and `connect_insecure`. Host
-      behaviour is unchanged: still aws-lc, same protocol versions; clippy `--all-features -D warnings` and
-      nightly fmt are clean. `cargo tree --target x86_64-pc-qnx -i aws-lc-sys` is now empty.
-      Why aws-lc failed: its build passes `--include=<prefix header>`, which qcc rejects (`qcc -include X`
-      and `ntox86_64-gcc --include=X` both work).
-      **ring 0.17.14 needs a fork** (2 lines), for two reasons:
-      1. `src/rand.rs` only implements `SecureRandom for SystemRandom` on an OS allowlist without `qnx`
-         (rustls then fails to compile). Added `qnx`; it then draws from getrandom 0.2 → `/dev/urandom`.
-      2. `build.rs` only builds its perlasm for OSes in `LINUX_ABI`. Without `qnx` there, ring's C part
-         builds but **binaries fail to link** (undefined `ring_core_0_17_14__sha512_block_data_order_nohw`,
-         `aesni_gcm_decrypt`, ...): on x86_64 ring has no pure-C fallback; its Rust code calls the asm
-         directly. (An earlier note here claiming a slower-but-working C fallback was wrong; libraries
-         compiled, but nothing had been linked yet.) Added `qnx`: QNX x86_64 is SysV ELF, so the `elf`
-         perlasm flavour applies.
-      Validated on target by `smoke/random-smoke`: round trips + tamper rejection (AES-256-GCM,
-      ChaCha20-Poly1305), SHA-256 KAT, X25519, Ed25519; plus `random-smoke ring-vectors`, a deterministic
-      run over SHA-2/HMAC/AES-GCM/ChaCha20-Poly1305/Ed25519 at 19 lengths (0 B–64 KiB), whose digests match
-      the Linux host exactly in debug and release (QEMU `--cpu host` → same AVX2/AES-NI paths).
-      ring's own test suite wasn't run: the crates.io package omits its test vectors.
-      With these, `ring`, `rustls`, `rand` 0.9/0.10 and `x25519-dalek` build for QNX inside tailscale-rs.
-      Next blocker for `tokio-rustls`/`ts_tls_util`: tokio 1.54.1 (needs re-fork; tailscale-rs moved to v0.7.1).
-      `signal-hook-registry` is fixed (see below).
-- [ ] Verify ABI-sensitive bits against QNX 8.0 headers in `~/qnx800/target/qnx/usr/include`
-      (`sockaddr` layouts, `msghdr`, `IP_PKTINFO`/`IP_RECVDSTADDR`, `SO_REUSEPORT`, `MSG_*` flags) wherever the crates' `nto` code
-      assumed 7.x/io-pkt.
+## Phase 0: Rust toolchain ✅
 
-Exit: `tailscale` and its examples cross-compile for `x86_64-pc-qnx`.
+- [x] Pin a nightly that works: **`nightly-2026-11-09`** (rustc 1.102.0-nightly `5b7b37aef`).
+- [x] Cargo config for `x86_64-pc-qnx`:
+  - linker: qcc
+  - `-Zbuild-std`
+  - `CC`/`CXX`/`AR` for C dependencies
+  - runner: `scripts/qnx-run.sh`
+- [x] Fix the target image so sshd starts and accepts root key login (see README §4).
+- [x] Smoke tests pass on the target:
+  - [x] `hello`
+  - [x] `std-smoke` (13 checks)
+  - [x] `tokio-smoke` (5 checks)
 
-## Phase 2: tailscale-rs changes for QNX (3–5 days)
+**Exit:** an async Rust binary built on the host runs on QNX ✅
 
-- [ ] **`ts_netmon`**: the non-supported-OS fallback `NoopMon` uses `unimplemented!()`. First make sure
-      that path is never called on qnx, or give it a polling implementation (re-read `getifaddrs` every N seconds).
-      Then a real backend: reuse `src/bsd/` (PF_ROUTE routing socket, currently `cfg(macos)`).
-      QNX io-sock is FreeBSD-derived, so adapt `bsd/net_table/{interface_hdr,route_hdr}.rs` to the FreeBSD
-      `if_msghdr`/`rt_msghdr` layouts in `~/qnx800/target/qnx/usr/include/net/{if,route}.h`.
-- [ ] Add `target_os = "qnx"` to `netmon.rs`/`lib.rs` cfgs and the `ts_netmon` `Cargo.toml` target deps
-      (`libc`, `socket2`, `nom`, `zerocopy`… the macOS set).
-- [ ] State / key file location: default to a writable QNX path (e.g. `/data/var/tailscale/`), since the root may be
-      read-only/union in mkqnximage builds.
-- [ ] OS reporting to control: `std::env::consts::OS == "qnx"`; check the admin console accepts and shows it.
-- [ ] Gate anything else that misbehaves with a `qnx` cfg; keep the diff minimal and upstreamable.
+## Phase 1: Crate ecosystem ✅
 
-## Phase 3: Validation on the QEMU target (2–3 days)
+- [x] Fork each crate that doesn't know `target_os = "qnx"` into `~/Projects/QNX/qnx-crates/`, at the locked
+      versions (see [Crate patches](#crate-patches)).
+- [x] Discovery loop: build `-p tailscale --examples` and fix the next failing crate, until the whole build
+      succeeds.
+- [x] Switch TLS from aws-lc-rs to ring on QNX (see [tailscale-rs changes](#tailscale-rs-changes)).
+- [ ] Review the ABI against QNX 8 headers (open issue 7).
+- [ ] Run mio's test suite on the target (open issue 8).
 
-- [ ] Run `examples/tcp_echo` and `examples/peer_ping` on QNX with an auth key; peer them with a normal
-      Go Tailscale client on your laptop.
-- [ ] Device appears in the admin console; ping works both ways over DERP.
-- [ ] Direct path: STUN/netcheck works through the QEMU NAT (virbr0 → Proxmox → LAN). Expect DERP fallback
-      more often (upstream NAT traversal is still WIP, and there's double NAT here).
-      Optionally test with `OPT_NETWORK=bridge` to put the QNX VM straight on the LAN.
-- [ ] Throughput and latency vs a Linux build of the same example on the same box.
-- [ ] 24h soak: key/DERP reconnects, netmon events (unplug/replug the virtual NIC), memory growth.
-- [ ] Run the workspace unit tests on target where feasible (a `runner` in `.cargo/config.toml` that scp's + ssh-runs the binary).
+**Exit:** `tailscale` and its examples cross-compile for `x86_64-pc-qnx` ✅
 
-Exit: a QNX process holds a stable tailnet connection and serves TCP to peers.
+## Phase 2: tailscale-rs changes for QNX
 
-## Phase 4: QNX developer integration (2–4 days)
+- [ ] **Network monitor:**
+  - [ ] Quick version: poll `getifaddrs` every N seconds.
+  - [ ] Real backend: reuse `ts_netmon/src/bsd/` (PF_ROUTE, currently macOS-only). io-sock is FreeBSD-derived,
+        so adapt `bsd/net_table/{interface_hdr,route_hdr}.rs` to the layouts in
+        `~/qnx800/target/qnx/usr/include/net/{if,route}.h`.
+  - [ ] Add `qnx` to the cfgs in `netmon.rs`/`lib.rs` and to `ts_netmon`'s target dependencies.
+- [ ] Default the state/key file to a writable path such as `/data/var/tailscale/`.
+- [ ] Check that the admin console accepts and shows OS `qnx`.
+- [ ] Gate anything else that misbehaves. Keep the diff small and upstreamable.
 
-- [ ] Build `ts_ffi` for QNX as a `staticlib` (and `cdylib`); C sample built with `qcc`.
-- [ ] Hook it into a QNX VS Code extension project (CMake + `ts_ffi.h`), so a C/C++ QNX app joins the tailnet.
-- [ ] Package the binary in the mkqnximage target (`local/snippets/system_files.custom`), auto-start via
-      `post_start.custom`; auth key / state on the data partition.
-- [ ] aarch64: same steps with `aarch64-unknown-qnx` and `-Vgcc_ntoaarch64le`.
+## Phase 3: Validation on the QEMU target
+
+- [x] `tcp_echo` joins the tailnet and serves TCP to a Go-client peer over DERP.
+- [x] The device appears in the admin console.
+- [ ] `peer_ping` example.
+- [ ] Direct (non-DERP) path. QEMU NAT plus the LAN NAT makes this unlikely. Try `OPT_NETWORK=bridge` to put
+      the VM on the LAN.
+- [ ] Throughput and latency compared with the same example on Linux.
+- [ ] 24-hour soak test: DERP and key reconnects, unplugging and replugging the virtual network card, memory growth.
+- [ ] Workspace unit tests on the target, where feasible.
+
+**Exit:** a QNX process holds a stable tailnet connection and serves TCP to peers.
+
+## Phase 4: QNX developer integration
+
+- [ ] Build `ts_ffi` as a `staticlib`/`cdylib`, plus a C sample built with qcc.
+- [ ] Use it from a QNX VS Code extension project (CMake + `ts_ffi.h`).
+- [ ] Package the binary into the mkqnximage target, auto-started, with state on `/data`.
+- [ ] aarch64: `aarch64-unknown-qnx` with `-Vgcc_ntoaarch64le`.
 
 ## Phase 5: Stretch goals
 
-- [ ] **System-wide VPN for all QNX apps**: a small daemon that reads/writes IP packets on io-sock's
-      FreeBSD-style `/dev/tun` (`net/if_tun.h`: `TUNSIFHEAD`, `TUNSIFMODE`) and feeds them to tailscale-rs's
-      dataplane instead of smoltcp. Needs a `tun-rs` QNX backend (FreeBSD backend as template) plus
-      route setup via `route`/PF_ROUTE. Depends on tailscale-rs exposing a raw-packet path; check upstream first.
-- [ ] `ssh` feature (`russh` with aws-lc → needs `aws-lc-sys` on QNX, or russh with ring).
-- [ ] Upstream: crate patches → mio/tokio/socket2/getrandom/rustix/errno; QNX in tailscale-rs's platform list
-      (talk to maintainers about CI: cross-build + QEMU QNX runner).
+- [ ] **System-wide VPN:**
+  - a daemon that moves packets between io-sock's `/dev/tun` and tailscale-rs's data path
+  - routes via PF_ROUTE
+  - needs a QNX backend for `tun-rs`, and a raw-packet API in tailscale-rs
+- [ ] `ssh` feature (needs aws-lc-sys on QNX, or russh with ring).
+- [ ] Upstream the crate patches, and get QNX into tailscale-rs's platform list with CI.
 
 ---
+
+## Crate patches
+
+libc models QNX 8 (`target_os = "qnx"`) as QNX 7's `nto` code plus the io-sock network stack. Most crates
+only check for `nto`, so the patching rule is:
+
+> Add `qnx` wherever `nto` appears. Where a crate splits `nto70`/`nto71`, send `qnx` down the **io-sock**
+> (`nto71_iosock`) side.
+
+`scripts/add-qnx-cfg.py` does the mechanical part. Some crates also gate dependencies in `Cargo.toml`, which
+the script doesn't touch. Each fork is a pristine crates.io commit plus an uncommitted diff, saved as
+`patches/<crate>-<version>.patch`.
+
+| Crate | Why it needs a patch | Change | Validated by |
+|---|---|---|---|
+| `mio` 1.2.4 | tokio's event loop; its poll(2) backend only enabled for `nto` | 7 files | `tokio-smoke` |
+| `socket2` 0.6.5 | socket options gated on `nto` | 4 files | `tokio-smoke` |
+| `tokio` 1.54.1 | peer credentials, `read_dir`, process uid/gid | 3 files | `tokio-smoke` |
+| `getrandom` 0.2.17 / 0.3.4 / 0.4.3 | QNX 8 has no `getrandom`/`getentropy`/`arc4random`; uses `/dev/urandom` like `nto` | 2–3 files each, plus `Cargo.toml` for 0.3/0.4 | `random-smoke` |
+| `ring` 0.17.14 | `SystemRandom` OS allowlist; assembly only built for OSes in `LINUX_ABI` (link fails otherwise, no C fallback on x86_64) | 2 lines | `random-smoke`, plus digests identical to the host |
+| `signal-hook-registry` 1.4.8 | uses `SA_RESTART`, which QNX 8 doesn't have; takes `nto`'s `flags = 0` path | 2 lines | `tokio-smoke` signals check |
+| `errno` 0.3.14 | errno accessor must link as `__get_errno_ptr` | 1 line | `tokio-smoke` signals check |
+| `rustix` 1.1.6 | without it QNX falls into rustix's Linux code (used by `gethostname`) | 30 files, all mechanical | `rustix-smoke` |
+
+No patch needed: `libc` 0.2.191, `cc` 1.8.0, `gethostname` 1.1.0. `rtnetlink` and `windows` are already gated
+to their OSes.
+
+### Wiring the forks in
+
+- **This repo:** `[patch.crates-io]` in `Cargo.toml`.
+- **tailscale-rs:** `[patch.crates-io]` with absolute paths, in a local `.cargo/config.toml`.
+  - The config is excluded via `.git/info/exclude`, so upstream files stay clean.
+  - Don't commit the `Cargo.lock` changes.
+- **The "patch not used" warning is spurious.** With `-Zbuild-std`, cargo prints
+  `warning: patch ... was not used in the crate graph` for every config-level patch, because it also resolves
+  std's dependency graph. `cargo tree -i <crate>` confirms the fork is used.
+
+## tailscale-rs changes
+
+| Where | Change | Why |
+|---|---|---|
+| `crates/utils/ts_tls_util/Cargo.toml` | `tokio-rustls` uses `aws-lc-rs` except on QNX, where it uses `ring` (target-specific dependencies) | aws-lc-sys's build passes `--include=<header>`, which qcc rejects |
+| `crates/utils/ts_tls_util/src/lib.rs`, `insecure.rs` | A `CRYPTO_PROVIDER` static, passed through `ClientConfig::builder_with_provider` | The provider choice doesn't depend on which rustls features other crates enable. Host behaviour is unchanged |
+| `.cargo/config.toml` (local only) | QNX target config and `[patch.crates-io]` | See above |
+
+Committed locally in tailscale-rs (`c16d8f7`, `0dbf6e2`, `0022220`) and exported as
+`patches/tailscale-rs-0.7.1.patch`, which applies to tag `v0.7.1`.
+
+---
+
+## QNX 8 platform facts
+
+| Fact | Consequence |
+|---|---|
+| No `getrandom`, `getentropy` or `arc4random` | Randomness comes from `/dev/urandom`, served by the `random` resource manager |
+| No `SA_RESTART` (commented out in `<signal.h>`) | Interrupted syscalls return `EINTR` (open issue 6) |
+| io-sock is FreeBSD-derived | PF_ROUTE and `if_msghdr`/`rt_msghdr` layouts as on FreeBSD; `/dev/tun` for Phase 5 |
+| UDP receive buffer defaults to 42 KB (`net.inet.udp.recvspace`); the maximum is just under 2 MiB (`kern.ipc.maxsockbuf`) | Raise `SO_RCVBUF` on busy UDP sockets (open issue 5) |
+| x86_64 uses the SysV ELF ABI | ring's `elf` assembly applies as is |
+| errno 265 is `EHOSTUNREACH` | Seen when sending to IPv6 peers; the QEMU NAT is IPv4-only |
+| The qnx6 filesystem frees deleted space only after `sync` | Run `sync` before checking free space on `/data` |
+| The QEMU image's `/data` is 61 MB | Deploy release (or stripped) binaries |
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| Tier-3 target breaks on nightly | Pin a dated nightly; std smoke tests in Phase 0 |
-| A crate's `nto` path assumes QNX 7.x / io-pkt ABI | Diff against QNX 8.0 headers; prefer `nto71_iosock` branches; test on target |
-| `aws-lc-sys` won't cross-build | Use `ring` provider (Phase 1) |
-| tailscale-rs is preview: unaudited crypto, API churn, NAT traversal WIP | Fine for dev/prototyping; track upstream monthly releases; don't ship in safety-critical paths yet |
-| Library-only, no system-wide VPN | Phase 5 tun daemon, or put a Linux subnet router in front of the QNX network |
+| A nightly update breaks the tier-3 target | Pinned nightly; smoke tests |
+| A crate's `nto` code assumes the QNX 7 / io-pkt ABI | ABI review (open issue 7); test on the target |
+| tailscale-rs is preview software: unaudited crypto, API churn, NAT traversal still in progress | Fine for development; track upstream releases; keep it out of safety-critical paths |
+| It's a library, not a system-wide VPN | Phase 5 tun daemon, or a Linux subnet router in front of the QNX network |
 
-## Rough effort
+## Why tailscale-rs and not the Go client
 
-| Phase | Effort |
-|---|---|
-| 0 Toolchain | 1–2 days |
-| 1 Crate patches | 3–5 days |
-| 2 tailscale-rs changes | 3–5 days |
-| 3 Validation | 2–3 days |
-| 4 Integration | 2–4 days |
+The Go client would first need a Go runtime port to QNX. `GOOS=qnx` doesn't exist, and a port needs:
+- a libc-calling runtime
+- a poll-based network poller (QNX has no epoll or kqueue)
+- qcc linking
+- `x/sys/unix` support
 
-**First QNX binary on the tailnet: about 1–2 weeks** (vs about 2–3 months for the Go route).
+That's months of work. It would bring full `tailscaled` (tun, subnet routing, SSH, MagicDNS); revisit only if
+Phase 5 falls short.
 
-## Alternative considered: Go tailscale
+tailscale-rs is Tailscale's official Rust implementation, and Rust already has a QNX 8 target. Its only
+OS-specific code is the network monitor (`ts_netmon`) and an optional tun device. The rest is portable Rust:
+- the control protocol
+- WireGuard
+- DERP
+- disco
+- STUN
+- the smoltcp network stack
 
-Would need a full Go port (`GOOS=qnx`): a libc-calling runtime like solaris/aix, a poll-based netpoller
-(QNX has no userland kqueue/epoll), external linking through qcc for QNX's ELF layout
-(`/usr/lib/ldqnx-64.so.2` + QNX `.note`), and `x/sys/unix` for QNX. Benefit: the full `tailscaled`
-feature set (tun, subnet routing, SSH, MagicDNS). Revisit only if Phase 5's system-wide VPN proves
-insufficient.
-
-The Go client would first need a Go runtime port to QNX (`GOOS=qnx` doesn't exist):
-months of work. tailscale-rs is Tailscale's official Rust reimplementation.
-Rust already has a QNX 8.0 target, and the code is almost OS-agnostic:
-
-- Rust target **`x86_64-pc-qnx`** / `aarch64-unknown-qnx` (`target_os = "qnx"`, QNX SDP 8.0+).
-  It's tier 3: no prebuilt std, so build with nightly `-Zbuild-std`. Linking goes through `qcc`.
-- The only OS-specific code in tailscale-rs is **`ts_netmon`** (Linux netlink / macOS PF_ROUTE / Windows),
-  plus an optional `tun-rs` device in `ts_netstack_smoltcp`. Everything else is portable Rust:
-  Noise control protocol, WireGuard (`ts_tunnel`), DERP, disco, STUN, smoltcp netstack.
-- Root CAs come from bundled `webpki-roots`, so a system cert store on QNX isn't needed.
-- No runtime experiment gate in this repo.
-
-**What you get:** like `tsnet`, tailscale-rs is a **library**. A QNX process embeds it and opens
-TCP/UDP sockets on the tailnet through a userspace netstack. It doesn't provide a system-wide
-VPN (`tailscaled` + tun + routes); that's a stretch goal (Phase 5). There are C bindings (`ts_ffi`),
-so QNX C/C++ apps can use it too.
+Root certificates come from the bundled `webpki-roots`, so no system certificate store is needed.

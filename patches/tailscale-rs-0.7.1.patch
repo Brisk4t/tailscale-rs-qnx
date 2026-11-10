@@ -1,0 +1,110 @@
+diff --git a/crates/utils/ts_tls_util/Cargo.toml b/crates/utils/ts_tls_util/Cargo.toml
+index e6df218..3c8e630 100644
+--- a/crates/utils/ts_tls_util/Cargo.toml
++++ b/crates/utils/ts_tls_util/Cargo.toml
+@@ -14,11 +14,18 @@ rust-version.workspace = true
+ [dependencies]
+ # Unconditionally required dependencies.
+ tokio.workspace = true
+-tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
+ tracing.workspace = true
+ url.workspace = true
+ webpki-roots = { version = "1.0" }
+ 
++# rustls crypto provider: aws-lc-rs, except on QNX, where aws-lc-sys's C build doesn't support
++# qcc and ring is used instead. Must match `CRYPTO_PROVIDER` in src/lib.rs.
++[target.'cfg(not(target_os = "qnx"))'.dependencies]
++tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
++
++[target.'cfg(target_os = "qnx")'.dependencies]
++tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
++
+ [features]
+ # enable the connect_insecure function, which doesn't validate tls certs
+ insecure = []
+diff --git a/crates/utils/ts_tls_util/src/insecure.rs b/crates/utils/ts_tls_util/src/insecure.rs
+index 698c9ee..2d6000a 100644
+--- a/crates/utils/ts_tls_util/src/insecure.rs
++++ b/crates/utils/ts_tls_util/src/insecure.rs
+@@ -7,7 +7,6 @@ use tokio_rustls::{
+     client::TlsStream,
+     rustls,
+     rustls::{
+-        ClientConfig,
+         client::danger::ServerCertVerified,
+         pki_types::{CertificateDer, UnixTime},
+     },
+@@ -26,7 +25,7 @@ where
+ {
+     tracing::warn!(server_name = %server_name.to_str(), "connecting insecure TLS");
+ 
+-    let rustls_config = ClientConfig::builder()
++    let rustls_config = crate::client_config_builder()?
+         .dangerous()
+         .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
+         .with_no_client_auth();
+@@ -72,7 +71,7 @@ impl ServerCertVerifier for InsecureCertVerifier {
+     }
+ 
+     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+-        rustls::crypto::aws_lc_rs::default_provider()
++        crate::crypto_provider()
+             .signature_verification_algorithms
+             .supported_schemes()
+     }
+diff --git a/crates/utils/ts_tls_util/src/lib.rs b/crates/utils/ts_tls_util/src/lib.rs
+index 6e4e32f..8fb291d 100644
+--- a/crates/utils/ts_tls_util/src/lib.rs
++++ b/crates/utils/ts_tls_util/src/lib.rs
+@@ -5,7 +5,7 @@ use std::sync::{Arc, LazyLock};
+ use tokio::io::{AsyncRead, AsyncWrite};
+ use tokio_rustls::{
+     TlsConnector,
+-    rustls::{ClientConfig, RootCertStore},
++    rustls::{ClientConfig, ConfigBuilder, RootCertStore, WantsVerifier, crypto::CryptoProvider},
+ };
+ pub use tokio_rustls::{client::TlsStream, rustls::pki_types::ServerName};
+ use url::Url;
+@@ -22,6 +22,33 @@ static ROOT_CERT_STORE: LazyLock<Arc<RootCertStore>> = LazyLock::new(|| {
+     })
+ });
+ 
++/// The rustls crypto provider used for all TLS connections.
++///
++/// aws-lc-rs everywhere except QNX, which uses ring (aws-lc-sys doesn't build with qcc). The
++/// provider is passed explicitly rather than relying on rustls's process-wide default, so the
++/// choice doesn't depend on which rustls provider features other crates in the build enable.
++static CRYPTO_PROVIDER: LazyLock<Arc<CryptoProvider>> = LazyLock::new(|| {
++    #[cfg(not(target_os = "qnx"))]
++    let provider = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider();
++    #[cfg(target_os = "qnx")]
++    let provider = tokio_rustls::rustls::crypto::ring::default_provider();
++    Arc::new(provider)
++});
++
++#[cfg_attr(not(feature = "insecure"), allow(dead_code))]
++pub(crate) fn crypto_provider() -> &'static Arc<CryptoProvider> {
++    &CRYPTO_PROVIDER
++}
++
++/// A [`ClientConfig`] builder using [`CRYPTO_PROVIDER`] and rustls's safe default protocol
++/// versions (the same versions `ClientConfig::builder()` picks).
++pub(crate) fn client_config_builder() -> std::io::Result<ConfigBuilder<ClientConfig, WantsVerifier>>
++{
++    ClientConfig::builder_with_provider(CRYPTO_PROVIDER.clone())
++        .with_safe_default_protocol_versions()
++        .map_err(std::io::Error::other)
++}
++
+ /// Establishes a TLS stream with a server over an existing connection.
+ ///
+ /// See module-level documentation for information on root certificates.
+@@ -45,7 +72,7 @@ where
+     Io: AsyncRead + AsyncWrite + Unpin,
+ {
+     // TODO(npry): custom tls cert verifier to support commonname overrides and self-signed certs
+-    let mut rustls_config = ClientConfig::builder()
++    let mut rustls_config = client_config_builder()?
+         .with_root_certificates(ROOT_CERT_STORE.clone())
+         .with_no_client_auth();
+ 

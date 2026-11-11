@@ -1,4 +1,4 @@
-# tailscale-QNX
+# tailscale-rs-QNX
 
 [tailscale-rs](https://github.com/tailscale/tailscale-rs) on QNX OS 8.0 (`x86_64-pc-qnx`).
 
@@ -110,6 +110,38 @@ ssh root@<tailnet IP of the target>
 - **qconn has no authentication.** Anyone who can reach it can run programs on the target as root, so only
   forward it on a tailnet whose policy restricts access to this device.
 
+### Build a QNX image with ts-forward
+
+Instead of copying ts-forward to a running VM, you can build a complete QNX image that has it installed and
+starts it at boot:
+
+```bash
+source ~/qnx800/qnxsdp-env.sh
+cargo build --release
+scripts/build-image.sh
+```
+
+The image is built in `build/image/` (git-ignored). Boot it with:
+
+```bash
+cd build/image && mkqnximage --run=-h
+```
+
+- ts-forward is `/system/bin/ts-forward`, and is restarted if it exits.
+- Its identity is kept in `/data/var/ts-forward/keys.json`, and its log in `/data/var/log/ts-forward.log`. On the
+  first boot the log shows the login URL to approve.
+- Settings, as environment variables for `scripts/build-image.sh`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TS_FORWARD_ARGS` | `-p ssh` | ts-forward's forwards, e.g. `"-p qnx-dev -p web"` |
+| `TS_AUTH_KEY` | none | joins the tailnet on first boot without the login URL. It's stored in the image, so use a single-use key |
+| `IMAGE_HOSTNAME` | `qnx-tailscale` | the QNX hostname, which is also the device's tailnet name |
+| `SSH_IDENT` | `~/.ssh/id_ed25519.pub` | public key for root ssh login |
+| `IMAGE_TYPE` | `qemu` | `mkqnximage --type`, e.g. `vmware` |
+
+Rebuilding the image wipes its data partition, including the identity, so the device needs approving again.
+
 ---
 
 ## Development
@@ -122,11 +154,12 @@ ssh root@<tailnet IP of the target>
 | `patches/<crate>-<version>.patch` | QNX patches for crates that don't know `target_os = "qnx"`: mio, socket2, tokio, getrandom 0.2/0.3/0.4, ring, signal-hook-registry, errno, rustix, wait-timeout |
 | `patches/tailscale-rs/*.patch` | This port's changes to tailscale-rs, against `v0.7.1`: TLS via ring (`0001`), polling network monitor (`0002`) |
 | `scripts/setup.sh` | Creates `build/`: the crate forks, the patched tailscale-rs checkout and its cargo config |
+| `scripts/build-image.sh` | Builds a QNX image in `build/image/` with ts-forward installed and started at boot |
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the target and runs it over ssh |
 | `scripts/add-qnx-cfg.sh` | Adds `target_os = "qnx"` next to every `target_os = "nto"` cfg, for patching more crates |
 | `smoke/*` | Smoke tests for the port itself (below) |
 | `scripts/udp-echo-client.py` | Host-side client for `tokio-smoke serve` |
-| `build/` | Created by `scripts/setup.sh`, git-ignored: `patched-crates/` and `tailscale-rs/` |
+| `build/` | Git-ignored. `patched-crates/` and `tailscale-rs/` from `scripts/setup.sh`, `image/` from `scripts/build-image.sh` |
 
 ### How the setup works
 

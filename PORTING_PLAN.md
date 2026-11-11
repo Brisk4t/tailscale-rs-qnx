@@ -47,7 +47,7 @@ How to build and run everything: [README.md](README.md).
 | 5 | **UDP drops under load** | Possible WireGuard packet loss at high rates | io-sock's default UDP receive buffer is 42 KB. 1 MiB fixed 32 clients, but 128+ still drop about 3 per run | Check what tailscale-rs's UDP sockets set. Measure throughput |
 | 6 | **No `SA_RESTART`** on QNX 8 | Blocking syscalls interrupted by a signal return `EINTR` | OS limitation | std and tokio retry; audit raw calls and FFI users |
 | 7 | **ABI not reviewed** | Wrong constants or struct layouts would compile and fail at runtime | The forks reuse code written for QNX 7 (`nto`) | Check `sockaddr`, `msghdr`, `IP_PKTINFO`, `SO_REUSEPORT` and `MSG_*` against `~/qnx800/target/qnx/usr/include` |
-| 8 | **mio's own tests not run on target** | mio is only covered indirectly, by `tokio-smoke` | – | Run them through `scripts/qnx-run.sh` |
+| 8 | **mio drops a readable event** after a writable one, in about 1 in 20 connects | mio's `connect` and `shutdown_read` tests hang or fail. tokio and tailscale-rs: probably none, because the next read re-arms it | QNX sometimes reports a just-connected socket as readable (`RDNORM\|OUT`); mio then stops waiting on `RDNORM`. mio's suite: 142 passed, 4 failed (2 from this, 2 harmless) | Optional: report to QNX with a C reproducer. See [diagnostics.md](diagnostics.md) |
 | 9 | **Debug binaries are too big** | Debug examples are 319 MB, 42 MB stripped, against a 61 MB `/data` | – | Deploy release builds |
 
 ---
@@ -76,7 +76,7 @@ How to build and run everything: [README.md](README.md).
       succeeds.
 - [x] Switch TLS from aws-lc-rs to ring on QNX (see [tailscale-rs changes](#tailscale-rs-changes)).
 - [ ] Review the ABI against QNX 8 headers (open issue 7).
-- [ ] Run mio's test suite on the target (open issue 8).
+- [x] Run mio's test suite on the target: 142 passed, 4 failed. Two come from a QNX `poll()` quirk (open issue 8), two are harmless test expectations.
 
 **Exit:** `tailscale` and its examples cross-compile for `x86_64-pc-qnx` ✅
 
@@ -88,19 +88,16 @@ How to build and run everything: [README.md](README.md).
     - the `platform_mon()` fallback on every Unix without a dedicated backend (previously `None`)
     - validated on QNX by `smoke/netmon-smoke`
     - committed on tailscale-rs branch `qnx` (`df19edc`)
-  - [ ] Run `tcp_echo` with it against the tailnet; check the runtime advertises the LAN address.
+  - [x] Run `tcp_echo` with it against the tailnet; check the runtime advertises the LAN address.
   - [ ] Optional real backend: reuse `ts_netmon/src/bsd/` (PF_ROUTE, currently macOS-only). io-sock is
         FreeBSD-derived, so adapt `bsd/net_table/{interface_hdr,route_hdr}.rs` to the layouts in
         `~/qnx800/target/qnx/usr/include/net/{if,route}.h`.
-- [ ] Default the state/key file to a writable path such as `/data/var/tailscale/`.
-- [ ] Check that the admin console accepts and shows OS `qnx`.
-- [ ] Gate anything else that misbehaves. Keep the diff small and upstreamable.
 
 ## Phase 3: Validation on the QEMU target
 
 - [x] `tcp_echo` joins the tailnet and serves TCP to a Go-client peer over DERP.
 - [x] The device appears in the admin console.
-- [ ] `peer_ping` example.
+- [x] `peer_ping` example.
 - [ ] Direct (non-DERP) path. QEMU NAT plus the LAN NAT makes this unlikely. Try `OPT_NETWORK=bridge` to put
       the VM on the LAN.
 - [ ] Throughput and latency compared with the same example on Linux.

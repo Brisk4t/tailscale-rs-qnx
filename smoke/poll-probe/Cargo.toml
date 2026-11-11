@@ -1,0 +1,10 @@
+[package]
+name = "poll-probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libc = "=0.2.191"
+socket2 = "=0.6.5"
+mio = { version = "=1.2.4", features = ["os-poll", "net", "log"] }
+log = { version = "0.4", features = ["std"] }

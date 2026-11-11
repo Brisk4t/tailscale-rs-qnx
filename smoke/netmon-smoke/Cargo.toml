@@ -1,0 +1,12 @@
+[package]
+name = "netmon-smoke"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# ts_netmon straight from the tailscale-rs checkout: its PollingMon is the fallback on QNX.
+# (Its own `cargo test` doesn't build for QNX: proptest -> wait-timeout uses SA_RESTART.)
+ts_netmon = { path = "../../../../tailscale-rs/crates/net/underlay/ts_netmon" }
+futures-util = { version = "0.3", default-features = false }
+ipnet = "2.12"
+tokio = { version = "1", features = ["rt", "macros", "time"] }

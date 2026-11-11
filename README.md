@@ -4,6 +4,7 @@ Porting [tailscale-rs](https://github.com/tailscale/tailscale-rs) to QNX OS 8.0 
 
 **Status:** tailscale-rs cross-compiles for QNX, and its `tcp_echo` example runs on a QEMU QNX VM. It joins a
 tailnet and serves TCP to other devices on it. Plan, open issues and findings: [PORTING_PLAN.md](PORTING_PLAN.md).
+Bugs under investigation: [diagnostics.md](diagnostics.md).
 
 ## What's here
 
@@ -21,6 +22,8 @@ tailnet and serves TCP to other devices on it. Plan, open issues and findings: [
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the QNX target and runs it over ssh |
 | `scripts/qnx-target-ip.sh` | Prints the QEMU target's current IP |
 | `scripts/udp-echo-client.py` | Host-side client for `tokio-smoke serve` |
+| `smoke/poll-probe` | What QNX's `poll()` reports when a TCP peer closes; `mio` replays mio's `tcp::connect` test; `mio-loop [N]` repeats it N times and counts lost readable events |
+| `scripts/run-mio-tests.sh` | Builds mio's test suite for QNX and runs it on the target (see diagnostics.md) |
 | `scripts/add-qnx-cfg.py` | Adds `target_os = "qnx"` next to every `target_os = "nto"` cfg (for patching more crates) |
 
 ## Prerequisites

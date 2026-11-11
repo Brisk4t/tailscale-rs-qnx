@@ -22,6 +22,7 @@ Bugs under investigation: [diagnostics.md](diagnostics.md).
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the QNX target and runs it over ssh |
 | `scripts/qnx-target-ip.sh` | Prints the QEMU target's current IP |
 | `scripts/udp-echo-client.py` | Host-side client for `tokio-smoke serve` |
+| `apps/ts-forward` | Exposes local TCP services (ssh, https, qconn, ...) on the tailnet, and lets local programs reach tailnet peers; see step 8 |
 | `smoke/poll-probe` | What QNX's `poll()` reports when a TCP peer closes; `mio` replays mio's `tcp::connect` test; `mio-loop [N]` repeats it N times and counts lost readable events |
 | `scripts/run-mio-tests.sh` | Builds mio's test suite for QNX and runs it on the target (see diagnostics.md) |
 | `scripts/add-qnx-cfg.py` | Adds `target_os = "qnx"` next to every `target_os = "nto"` cfg (for patching more crates) |
@@ -320,6 +321,51 @@ ifconfig lo0 inet 10.99.0.1 -alias        # AddrRemoved within 10 s
 **In tailscale-rs itself.** Run `tcp_echo` with `RUST_LOG=info,ts_runtime::netmon=debug`. The node's
 endpoints in the admin console should include its LAN address (`192.168.122.x:<port>`). An alias added as
 above should appear there too.
+
+## 8. Expose local services with ts-forward
+
+`ts-forward` joins the tailnet as its own device and forwards TCP connections both ways, for programs that
+don't embed tailscale-rs:
+- **Inbound:** tailnet ports to local services, so sshd, a web server or qconn become reachable from the tailnet.
+- **Outbound:** local ports to tailnet peers, so local programs can reach peers. They can't reach `100.x`
+  addresses directly, because the tailnet only exists inside ts-forward.
+
+It needs the tailscale-rs checkout from step 6.
+
+```bash
+source ~/qnx800/qnxsdp-env.sh
+cargo build --release -p ts-forward
+scp $SSHOPT target/x86_64-pc-qnx/release/ts-forward root@$IP:/data/home/root/bin/
+```
+
+On the target:
+
+```sh
+cd /data/home/root/bin
+./ts-forward --list-presets              # built-in forwards and groups
+./ts-forward                             # default: ssh (tailnet :22 -> 127.0.0.1:22)
+./ts-forward -p qnx-dev -p web           # ssh + qconn + http/https/8080/8443
+./ts-forward -f 2222=22 -f 8443=192.168.1.10:443   # custom: TAILNET_PORT=[HOST:]PORT
+./ts-forward --to 2201=laptop:22         # outbound only: 127.0.0.1:2201 -> peer `laptop`, port 22
+ssh -p 2201 user@127.0.0.1               # ...then, on the target, reach the peer's sshd through it
+```
+
+- **Outbound specs:** `[BIND:]LOCAL_PORT=PEER:PORT`. `PEER` is a tailnet IP or a peer's name as shown in the
+  admin console, looked up in the network map for each connection. `BIND` defaults to `127.0.0.1`; use
+  `0.0.0.0:2201=...` only if other hosts on the device's LAN should be able to use the forward.
+- **Defaults:** with only `--to` given, no inbound forwards are opened. Add `-p ssh` to get both.
+
+- **Identity:** its own key file, `ts-forward-keys.json` (`-c` to change). The first run prints a login URL, or
+  takes `-k`/`TS_AUTH_KEY`. The device name defaults to the OS hostname (`-H` to change).
+- **Access control:** your tailnet policy decides which peers can connect. The local service sees connections
+  from `127.0.0.1`. ts-forward logs each connection with the peer's tailnet address and name.
+- **`qconn` has no authentication:** anyone allowed to reach it can run programs on the target as root.
+  Only enable it on a tailnet whose policy restricts access to this device.
+- **TCP only.** Multi-connection protocols like FTP don't work through it.
+- `--max-connections` (default 64) caps simultaneous connections; `--connect-timeout` (5 s) bounds local connects.
+
+From another device on the tailnet: `ssh root@<tailnet IP>`. sshd on the target only accepts the keys
+installed with `--ssh-ident` (step 4b).
 
 ## How deployment works
 

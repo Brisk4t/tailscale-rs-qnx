@@ -1,0 +1,15 @@
+[package]
+name = "ts-forward"
+version = "0.1.0"
+edition = "2024"
+description = "Expose local TCP services (ssh, https, qconn, ...) on a tailnet, using tailscale-rs"
+
+[dependencies]
+# The `tailscale` crate straight from the tailscale-rs checkout (branch `qnx`).
+tailscale = { path = "../../../../tailscale-rs" }
+# Same version tailscale-rs locks, so the QNX fork in [patch.crates-io] applies.
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "signal"] }
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"

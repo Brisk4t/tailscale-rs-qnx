@@ -6,8 +6,8 @@
 **Source:** `~/Projects/tailscale-rs` at v0.7.1 (`a2a56c4`) plus local commits.
 
 **What you get:** tailscale-rs is a library, like Go's `tsnet`. A QNX process embeds it and opens TCP/UDP
-sockets on the tailnet through a userspace network stack (smoltcp). It is not a system-wide VPN; that's a
-stretch goal (Phase 5). C/C++ apps can use it through `ts_ffi`.
+sockets on the tailnet through a userspace network stack (smoltcp); other processes on the device aren't on
+the tailnet. C/C++ apps can use it through `ts_ffi`.
 
 How to build and run everything: [README.md](README.md).
 
@@ -98,8 +98,6 @@ How to build and run everything: [README.md](README.md).
 - [x] `tcp_echo` joins the tailnet and serves TCP to a Go-client peer over DERP.
 - [x] The device appears in the admin console.
 - [x] `peer_ping` example.
-- [ ] Direct (non-DERP) path. QEMU NAT plus the LAN NAT makes this unlikely. Try `OPT_NETWORK=bridge` to put
-      the VM on the LAN.
 - [ ] Throughput and latency compared with the same example on Linux.
 - [ ] 24-hour soak test: DERP and key reconnects, unplugging and replugging the virtual network card, memory growth.
 - [ ] Workspace unit tests on the target, where feasible.
@@ -111,14 +109,13 @@ How to build and run everything: [README.md](README.md).
 - [ ] Build `ts_ffi` as a `staticlib`/`cdylib`, plus a C sample built with qcc.
 - [ ] Use it from a QNX VS Code extension project (CMake + `ts_ffi.h`).
 - [ ] Package the binary into the mkqnximage target, auto-started, with state on `/data`.
+- [ ] Direct (non-DERP) path, on a real QNX device on the LAN running the packaged image. The QEMU VM sits behind
+      two NATs, so it isn't tested there. Pass: `tailscale ping` from a peer replies `via <LAN ip:port>`, and the
+      console lists the device's LAN endpoint.
 - [ ] aarch64: `aarch64-unknown-qnx` with `-Vgcc_ntoaarch64le`.
 
 ## Phase 5: Stretch goals
 
-- [ ] **System-wide VPN:**
-  - a daemon that moves packets between io-sock's `/dev/tun` and tailscale-rs's data path
-  - routes via PF_ROUTE
-  - needs a QNX backend for `tun-rs`, and a raw-packet API in tailscale-rs
 - [ ] `ssh` feature (needs aws-lc-sys on QNX, or russh with ring).
 - [ ] Upstream the crate patches, and get QNX into tailscale-rs's platform list with CI.
 
@@ -181,7 +178,7 @@ Committed on tailscale-rs branch `qnx` and exported (source only, no `Cargo.lock
 |---|---|
 | No `getrandom`, `getentropy` or `arc4random` | Randomness comes from `/dev/urandom`, served by the `random` resource manager |
 | No `SA_RESTART` (commented out in `<signal.h>`) | Interrupted syscalls return `EINTR` (open issue 6) |
-| io-sock is FreeBSD-derived | PF_ROUTE and `if_msghdr`/`rt_msghdr` layouts as on FreeBSD; `/dev/tun` for Phase 5 |
+| io-sock is FreeBSD-derived | PF_ROUTE and `if_msghdr`/`rt_msghdr` layouts as on FreeBSD |
 | UDP receive buffer defaults to 42 KB (`net.inet.udp.recvspace`); the maximum is just under 2 MiB (`kern.ipc.maxsockbuf`) | Raise `SO_RCVBUF` on busy UDP sockets (open issue 5) |
 | x86_64 uses the SysV ELF ABI | ring's `elf` assembly applies as is |
 | errno 265 is `EHOSTUNREACH` | Seen when sending to IPv6 peers; the QEMU NAT is IPv4-only |
@@ -195,7 +192,6 @@ Committed on tailscale-rs branch `qnx` and exported (source only, no `Cargo.lock
 | A nightly update breaks the tier-3 target | Pinned nightly; smoke tests |
 | A crate's `nto` code assumes the QNX 7 / io-pkt ABI | ABI review (open issue 7); test on the target |
 | tailscale-rs is preview software: unaudited crypto, API churn, NAT traversal still in progress | Fine for development; track upstream releases; keep it out of safety-critical paths |
-| It's a library, not a system-wide VPN | Phase 5 tun daemon, or a Linux subnet router in front of the QNX network |
 
 ## Why tailscale-rs and not the Go client
 
@@ -206,10 +202,10 @@ The Go client would first need a Go runtime port to QNX. `GOOS=qnx` doesn't exis
 - `x/sys/unix` support
 
 That's months of work. It would bring full `tailscaled` (tun, subnet routing, SSH, MagicDNS); revisit only if
-Phase 5 falls short.
+a system-wide tailnet interface on QNX becomes a requirement.
 
 tailscale-rs is Tailscale's official Rust implementation, and Rust already has a QNX 8 target. Its only
-OS-specific code is the network monitor (`ts_netmon`) and an optional tun device. The rest is portable Rust:
+OS-specific code is the network monitor (`ts_netmon`). The rest is portable Rust:
 - the control protocol
 - WireGuard
 - DERP

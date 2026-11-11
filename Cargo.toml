@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["smoke/*"]
+members = ["smoke/*", "apps/*"]
 
 [profile.release]
 panic = "abort"

@@ -29,10 +29,10 @@ How to build and run everything: [README.md](README.md).
 - Release `examples/tcp_echo` on the QEMU VM:
   - logs in to `controlplane.tailscale.com`
   - gets a tailnet address (100.77.109.107)
-  - echoes `nc` input from a macOS peer over DERP
+  - echoes `nc` input from a peer running the regular Tailscale client, over DERP
 - That exercises TLS (ring), the control channel, DERP, WireGuard (`ts_tunnel`) and the smoltcp stack.
-- All five smoke tests pass on the target in debug and release: `hello`, `std-smoke`, `tokio-smoke`,
-  `random-smoke` and `rustix-smoke`.
+- All six smoke tests pass on the target: `hello`, `std-smoke`, `tokio-smoke`, `random-smoke`,
+  `rustix-smoke` and `netmon-smoke`.
 
 ---
 
@@ -42,7 +42,7 @@ How to build and run everything: [README.md](README.md).
 |---|---|---|---|---|
 | 1 | **Interactive login exits with `410 Gone`** (`auth path not found`) after the URL is approved | First run dies; a rerun with the saved `tsrs_keys.json` works | Probably upstream: the follow-up long-poll fails | Repeat on the Linux host build. If it fails there too, report upstream |
 | 2 | **One `nc` attempt dropped** with `ts_tunnel: session not found` | Peer's TCP connection hangs; a later attempt worked | Unknown: stale session after a restart, or a replaced handshake | Watch for it with `RUST_LOG=ts_tunnel=debug` |
-| 3 | **No network monitor on QNX** | No LAN endpoints advertised (STUN only); network changes go unnoticed | `ts_netmon` has no QNX backend; `platform_mon()` returns `None` and the runtime skips it | Phase 2 |
+| 3 | **Network monitor is polling-only** | Changes noticed up to 10 s late; no routes reported | New `ts_netmon::PollingMon` (Go's `pollingMon` equivalent) is the fallback; there's no PF_ROUTE backend for QNX | Good enough for now. Run a tailnet test with it; PF_ROUTE backend only if needed |
 | 4 | **`tailscale ping` gets no reply over DERP** | Can't ping-check the node until there's a direct path | Upstream: `ts_runtime::disco` only answers pings that arrive over UDP | None needed. Use `nc` |
 | 5 | **UDP drops under load** | Possible WireGuard packet loss at high rates | io-sock's default UDP receive buffer is 42 KB. 1 MiB fixed 32 clients, but 128+ still drop about 3 per run | Check what tailscale-rs's UDP sockets set. Measure throughput |
 | 6 | **No `SA_RESTART`** on QNX 8 | Blocking syscalls interrupted by a signal return `EINTR` | OS limitation | std and tokio retry; audit raw calls and FFI users |
@@ -83,11 +83,15 @@ How to build and run everything: [README.md](README.md).
 ## Phase 2: tailscale-rs changes for QNX
 
 - [ ] **Network monitor:**
-  - [ ] Quick version: poll `getifaddrs` every N seconds.
-  - [ ] Real backend: reuse `ts_netmon/src/bsd/` (PF_ROUTE, currently macOS-only). io-sock is FreeBSD-derived,
-        so adapt `bsd/net_table/{interface_hdr,route_hdr}.rs` to the layouts in
+  - [x] `ts_netmon::PollingMon`, the equivalent of Go's `pollingMon`:
+    - re-reads `getifaddrs` every 10 s and diffs against the last snapshot
+    - the `platform_mon()` fallback on every Unix without a dedicated backend (previously `None`)
+    - validated on QNX by `smoke/netmon-smoke`
+    - committed on tailscale-rs branch `qnx` (`df19edc`)
+  - [ ] Run `tcp_echo` with it against the tailnet; check the runtime advertises the LAN address.
+  - [ ] Optional real backend: reuse `ts_netmon/src/bsd/` (PF_ROUTE, currently macOS-only). io-sock is
+        FreeBSD-derived, so adapt `bsd/net_table/{interface_hdr,route_hdr}.rs` to the layouts in
         `~/qnx800/target/qnx/usr/include/net/{if,route}.h`.
-  - [ ] Add `qnx` to the cfgs in `netmon.rs`/`lib.rs` and to `ts_netmon`'s target dependencies.
 - [ ] Default the state/key file to a writable path such as `/data/var/tailscale/`.
 - [ ] Check that the admin console accepts and shows OS `qnx`.
 - [ ] Gate anything else that misbehaves. Keep the diff small and upstreamable.
@@ -145,6 +149,7 @@ the script doesn't touch. Each fork is a pristine crates.io commit plus an uncom
 | `signal-hook-registry` 1.4.8 | uses `SA_RESTART`, which QNX 8 doesn't have; takes `nto`'s `flags = 0` path | 2 lines | `tokio-smoke` signals check |
 | `errno` 0.3.14 | errno accessor must link as `__get_errno_ptr` | 1 line | `tokio-smoke` signals check |
 | `rustix` 1.1.6 | without it QNX falls into rustix's Linux code (used by `gethostname`) | 30 files, all mechanical | `rustix-smoke` |
+| `wait-timeout` 0.2.1 | dev-dependency only (`proptest` → `rusty-fork`), needed to build tailscale-rs examples and tests; uses `SA_RESTART`. Also drops `#![deny(warnings)]`, since path dependencies aren't lint-capped | 2 files | `ts_netmon` unit tests on the target (9/9) |
 
 No patch needed: `libc` 0.2.191, `cc` 1.8.0, `gethostname` 1.1.0. `rtnetlink` and `windows` are already gated
 to their OSes.
@@ -165,10 +170,11 @@ to their OSes.
 |---|---|---|
 | `crates/utils/ts_tls_util/Cargo.toml` | `tokio-rustls` uses `aws-lc-rs` except on QNX, where it uses `ring` (target-specific dependencies) | aws-lc-sys's build passes `--include=<header>`, which qcc rejects |
 | `crates/utils/ts_tls_util/src/lib.rs`, `insecure.rs` | A `CRYPTO_PROVIDER` static, passed through `ClientConfig::builder_with_provider` | The provider choice doesn't depend on which rustls features other crates enable. Host behaviour is unchanged |
+| `crates/net/underlay/ts_netmon/src/polling.rs` + cfg wiring | `PollingMon`: polls `getifaddrs` every 10 s; the `platform_mon()` fallback on Unix without a dedicated backend | QNX has no netmon backend (open issue 3). Validated by `netmon-smoke`, the `monitor` example, and ts_netmon's unit tests on the target |
 | `.cargo/config.toml` (local only) | QNX target config and `[patch.crates-io]` | See above |
 
-Committed locally in tailscale-rs (`c16d8f7`, `0dbf6e2`, `0022220`) and exported as
-`patches/tailscale-rs-0.7.1.patch`, which applies to tag `v0.7.1`.
+Committed on tailscale-rs branch `qnx` and exported (source only, no `Cargo.lock`) as
+`patches/tailscale-rs/tailscale-rs-0.7.1.patch`, which applies to tag `v0.7.1`.
 
 ---
 

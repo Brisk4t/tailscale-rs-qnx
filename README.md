@@ -14,8 +14,9 @@ tailnet and serves TCP to other devices on it. Plan, open issues and findings: [
 | `smoke/tokio-smoke` | tokio checks: timers, tasks, UDP echo (32 clients), 1 MiB TCP echo, `tokio::signal`; also a `serve` mode |
 | `smoke/random-smoke` | getrandom 0.2/0.3/0.4 and ring checks; `ring-vectors` mode for comparing against the host |
 | `smoke/rustix-smoke` | `gethostname` and `rustix::system::uname` against the target's `hostname` and `uname` |
-| `patches/<crate>-<version>.patch` | QNX patches for mio, socket2, tokio, getrandom ×3, ring, signal-hook-registry, errno, rustix |
-| `patches/tailscale-rs-0.7.1.patch` | The QNX change to tailscale-rs itself (TLS via ring) |
+| `smoke/netmon-smoke` | tailscale-rs's polling network monitor (`ts_netmon::PollingMon`) against `ifconfig`, plus change detection |
+| `patches/<crate>-<version>.patch` | QNX patches for mio, socket2, tokio, getrandom ×3, ring, signal-hook-registry, errno, rustix, wait-timeout |
+| `patches/tailscale-rs/tailscale-rs-0.7.1.patch` | The QNX changes to tailscale-rs itself: TLS via ring, polling network monitor |
 | `scripts/setup-qnx-crates.sh` | Downloads the crates from crates.io and applies the patches |
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the QNX target and runs it over ssh |
 | `scripts/qnx-target-ip.sh` | Prints the QEMU target's current IP |
@@ -142,10 +143,15 @@ cargo run -p std-smoke             # 13 checks, 0 required failures
 cargo run -p tokio-smoke           # 5 checks, 0 failures
 cargo run -p random-smoke          # 4 checks, 0 failures
 cargo run -p rustix-smoke          # 5 checks, 0 failures
+cargo run -p netmon-smoke          # 5 checks, 0 failures (needs tailscale-rs checked out, step 6)
 ```
 
 Add `--release` to test release builds. Each test exits non-zero if a required check fails. `std-smoke`'s
 `net/internet` check is optional and prints `WARN` if the VM has no outbound network.
+
+`netmon-smoke` builds `ts_netmon` from `~/Projects/tailscale-rs`. Its last two checks add and remove the
+alias `10.99.0.1/32` on `lo0` to test change detection, so they only run on QNX, as root. On a Linux host it
+runs the first three checks only.
 
 **ring on QNX vs the host.** Check that ring produces the same bytes on both:
 
@@ -176,14 +182,15 @@ $SSH 'slay -f tokio-smoke'
 
 ## 6. Build tailscale-rs for QNX
 
-**a. Check out v0.7.1 and apply the QNX patch.** On QNX the patch switches TLS from aws-lc-rs (which doesn't
-build with qcc) to ring. Host builds still use aws-lc-rs.
+**a. Check out v0.7.1 and apply the QNX patch.** The patch does two things:
+- switches TLS from aws-lc-rs (which doesn't build with qcc) to ring on QNX; host builds still use aws-lc-rs
+- adds a polling network monitor (`ts_netmon::PollingMon`), used on QNX and other Unixes with no dedicated backend
 
 ```bash
 cd ~/Projects
 git clone https://github.com/tailscale/tailscale-rs.git && cd tailscale-rs
 git checkout v0.7.1
-git apply ~/Projects/QNX/tailscale-QNX/patches/tailscale-rs-0.7.1.patch
+git apply ~/Projects/QNX/tailscale-QNX/patches/tailscale-rs/tailscale-rs-0.7.1.patch
 ```
 
 **b. Add a local cargo config.** It holds the QNX target settings and points the patched crates at the
@@ -216,6 +223,7 @@ ring    = { path = "/home/<you>/Projects/QNX/qnx-crates/ring-0.17.14" }
 signal-hook-registry = { path = "/home/<you>/Projects/QNX/qnx-crates/signal-hook-registry-1.4.8" }
 errno   = { path = "/home/<you>/Projects/QNX/qnx-crates/errno-0.3.14" }
 rustix  = { path = "/home/<you>/Projects/QNX/qnx-crates/rustix-1.1.6" }
+wait-timeout = { path = "/home/<you>/Projects/QNX/qnx-crates/wait-timeout-0.2.1" }
 EOF
 echo '/.cargo/' >> .git/info/exclude
 ```
@@ -278,6 +286,38 @@ tcp_echo logs `accepted connection` when `nc` connects. For more detail, run it 
 - **`No route to host (os error 265)`** when sending to a peer's IPv6 address is harmless: the QEMU NAT is
   IPv4-only.
 
+### Testing the network monitor
+
+Besides `netmon-smoke` (step 5), the tailscale-rs side has two tests that run on the target. Both need the
+`wait-timeout` fork, because tailscale-rs examples and tests pull in `proptest`.
+
+**ts_netmon's unit tests** (9 tests). The runner deploys and runs them. Delete the binary afterwards to save
+space on `/data`:
+
+```bash
+cd ~/Projects/tailscale-rs
+cargo +nightly-2026-11-09 test --release --target x86_64-pc-qnx -p ts_netmon --lib
+```
+
+**Live events with the `monitor` example.** Build and copy it:
+
+```bash
+cargo +nightly-2026-11-09 build --release --target x86_64-pc-qnx -p ts_netmon --example monitor
+scp $SSHOPT target/x86_64-pc-qnx/release/examples/monitor root@$IP:/data/home/root/bin/
+```
+
+Run `./monitor` on the target. It prints the current interfaces and addresses. Then, from a second ssh
+session:
+
+```sh
+ifconfig lo0 inet 10.99.0.1/32 alias      # monitor shows AddrUpsert(..., 10.99.0.1/32) within 10 s
+ifconfig lo0 inet 10.99.0.1 -alias        # AddrRemoved within 10 s
+```
+
+**In tailscale-rs itself.** Run `tcp_echo` with `RUST_LOG=info,ts_runtime::netmon=debug`. The node's
+endpoints in the admin console should include its LAN address (`192.168.122.x:<port>`). An alias added as
+above should appear there too.
+
 ## How deployment works
 
 `scripts/qnx-run.sh <binary> [args...]` does this:
@@ -314,3 +354,4 @@ ssh -o UserKnownHostsFile=~/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ide
 | `no DHCP lease for ...` / `No route to host` | The VM hasn't finished booting (check `output/qemu.out`) or isn't running (`pgrep -a qemu-system`) |
 | `No space left on device` during deploy | Clear `/data/home/root/bin` on the target, run `sync` (qnx6 frees space only then), and deploy release builds |
 | tcp_echo exits with `410 Gone` after login | Run it again; the node was registered |
+| `` cannot find value `SA_RESTART` `` in `wait-timeout` | The `wait-timeout` fork isn't in tailscale-rs's `[patch.crates-io]` (step 6b) |

@@ -1,0 +1,32 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index fb9c941..f81cbf1 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -28,7 +28,8 @@
+ //! };
+ //! ```
+ 
+-#![deny(missing_docs, warnings)]
++// `warnings` dropped from deny: as a path dependency (QNX fork) its 2017-era code isn't lint-capped.
++#![deny(missing_docs)]
+ #![doc(html_root_url = "https://docs.rs/wait-timeout/0.1")]
+ 
+ #[cfg(unix)]
+diff --git a/src/unix.rs b/src/unix.rs
+index ba36139..25351fd 100644
+--- a/src/unix.rs
++++ b/src/unix.rs
+@@ -66,7 +66,12 @@ impl State {
+             // Register our sigchld handler
+             let mut new: libc::sigaction = mem::zeroed();
+             new.sa_sigaction = sigchld_handler as usize;
+-            new.sa_flags = libc::SA_NOCLDSTOP | libc::SA_RESTART | libc::SA_SIGINFO;
++            // QNX 8 has no SA_RESTART (commented out in <signal.h>).
++            #[cfg(not(target_os = "qnx"))]
++            let restart = libc::SA_RESTART;
++            #[cfg(target_os = "qnx")]
++            let restart = 0;
++            new.sa_flags = libc::SA_NOCLDSTOP | restart | libc::SA_SIGINFO;
+ 
+             STATE = Box::into_raw(state);
+ 

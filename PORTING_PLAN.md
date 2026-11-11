@@ -60,7 +60,7 @@ How to build and run everything: [README.md](README.md).
   - `-Zbuild-std`
   - `CC`/`CXX`/`AR` for C dependencies
   - runner: `scripts/qnx-run.sh`
-- [x] Fix the target image so sshd starts and accepts root key login (see README §4).
+- [x] Fix the target image so sshd starts and accepts root key login (see README §5).
 - [x] Smoke tests pass on the target:
   - [x] `hello`
   - [x] `std-smoke` (13 checks)

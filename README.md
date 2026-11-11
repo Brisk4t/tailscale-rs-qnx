@@ -16,15 +16,14 @@ Bugs under investigation: [diagnostics.md](diagnostics.md).
 | `smoke/random-smoke` | getrandom 0.2/0.3/0.4 and ring checks; `ring-vectors` mode for comparing against the host |
 | `smoke/rustix-smoke` | `gethostname` and `rustix::system::uname` against the target's `hostname` and `uname` |
 | `smoke/netmon-smoke` | tailscale-rs's polling network monitor (`ts_netmon::PollingMon`) against `ifconfig`, plus change detection |
+| `apps/ts-forward` | Exposes local TCP services (ssh, https, qconn, ...) on the tailnet, and lets local programs reach tailnet peers; see step 8 |
 | `patches/<crate>-<version>.patch` | QNX patches for mio, socket2, tokio, getrandom ×3, ring, signal-hook-registry, errno, rustix, wait-timeout |
 | `patches/tailscale-rs/tailscale-rs-0.7.1.patch` | The QNX changes to tailscale-rs itself: TLS via ring, polling network monitor |
 | `scripts/setup-qnx-crates.sh` | Downloads the crates from crates.io and applies the patches |
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the QNX target and runs it over ssh |
 | `scripts/qnx-target-ip.sh` | Prints the QEMU target's current IP |
 | `scripts/udp-echo-client.py` | Host-side client for `tokio-smoke serve` |
-| `apps/ts-forward` | Exposes local TCP services (ssh, https, qconn, ...) on the tailnet, and lets local programs reach tailnet peers; see step 8 |
-| `smoke/poll-probe` | What QNX's `poll()` reports when a TCP peer closes; `mio` replays mio's `tcp::connect` test; `mio-loop [N]` repeats it N times and counts lost readable events |
-| `scripts/run-mio-tests.sh` | Builds mio's test suite for QNX and runs it on the target (see diagnostics.md) |
+| `scripts/run-mio-tests.sh` | Builds mio's test suite for QNX and runs it on the target (results: PORTING_PLAN.md open issue 8) |
 | `scripts/add-qnx-cfg.py` | Adds `target_os = "qnx"` next to every `target_os = "nto"` cfg (for patching more crates) |
 
 ## Prerequisites
@@ -46,7 +45,7 @@ Expected layout:
 ├── QNX/
 │   ├── tailscale-QNX/      this repo
 │   └── qnx-crates/         patched crate forks (step 2)
-└── tailscale-rs/           upstream checkout at v0.7.1 (step 6)
+└── tailscale-rs/           upstream checkout at v0.7.1, QNX patch applied (step 3)
 ```
 
 This repo's `Cargo.toml` finds the forks by relative path. tailscale-rs's local config uses absolute paths.
@@ -84,107 +83,10 @@ scripts/setup-qnx-crates.sh          # -> ~/Projects/QNX/qnx-crates/<crate>-<ver
 Each fork is a git repo: one commit with the pristine crates.io source, and the QNX patch left uncommitted.
 `git diff` in a fork shows exactly the change. PORTING_PLAN.md explains why each crate needs a patch.
 
-## 3. Build
+## 3. Check out tailscale-rs
 
-```bash
-source ~/qnx800/qnxsdp-env.sh
-cargo build --workspace              # debug
-cargo build --workspace --release    # release (panic=abort)
-```
-
-The first build compiles std itself and takes about a minute. Binaries go to
-`target/x86_64-pc-qnx/{debug,release}/`.
-
-## 4. Set up the QEMU target (once)
-
-The target is a mkqnximage project at `~/qnxprojects/targets/qemu-qnx800-x86_64`, for example one created by
-the QNX VS Code extension. It needs two changes before you can deploy over ssh.
-
-**a. Fix sshd.** The SDP's OpenSSH needs `sshd-auth`, but mkqnximage's image template only installs
-`sshd-session`. Without this fix, sshd fails at boot with `/usr/libexec/sshd-auth does not exist`.
-
-```bash
-cd ~/qnxprojects/targets/qemu-qnx800-x86_64
-cat >> local/snippets/system_files.custom <<'EOF'
-
-# OpenSSH 10 in the SDP needs sshd-auth; the stock template only installs sshd-session.
-bin/sshd-auth=usr/libexec/sshd-auth
-EOF
-cat >> local/snippets/ifs_files.custom <<'EOF'
-
-# sshd looks for sshd-auth at its compiled-in default path.
-[type=link] /usr/libexec/sshd-auth=/system/bin/sshd-auth
-EOF
-```
-
-**b. Install your ssh key for root and rebuild.** Rebuilding the image **wipes the data partition**.
-
-```bash
-./mkqnximage-wrapper.sh --ssh-ident=$HOME/.ssh/id_ed25519.pub --build
-```
-
-**Using the QNX VS Code extension from another machine?** The extension keeps its target list in your local
-VS Code user settings. Add the existing VM to `qnx.targets.list`, with `"vmtype": "qemu"` and
-`"path": "/home/<you>/qnxprojects/targets/qemu-qnx800-x86_64"`. Don't use "Create QNX Virtual Target" for it:
-that rebuilds the image.
-
-## 5. Run the smoke tests
-
-Boot the VM headless. The serial console goes to `output/qemu.out`.
-
-```bash
-cd ~/qnxprojects/targets/qemu-qnx800-x86_64
-./mkqnximage-wrapper.sh --run=-h
-grep 'Startup complete' output/qemu.out     # booted when this prints
-```
-
-Then, from this repo, `cargo run` builds, deploys and runs in one step:
-
-```bash
-source ~/qnx800/qnxsdp-env.sh
-cargo run -p hello                 # hello from Rust on qnx (x86_64), pid ...
-cargo run -p std-smoke             # 13 checks, 0 required failures
-cargo run -p tokio-smoke           # 5 checks, 0 failures
-cargo run -p random-smoke          # 4 checks, 0 failures
-cargo run -p rustix-smoke          # 5 checks, 0 failures
-cargo run -p netmon-smoke          # 5 checks, 0 failures (needs tailscale-rs checked out, step 6)
-```
-
-Add `--release` to test release builds. Each test exits non-zero if a required check fails. `std-smoke`'s
-`net/internet` check is optional and prints `WARN` if the VM has no outbound network.
-
-`netmon-smoke` builds `ts_netmon` from `~/Projects/tailscale-rs`. Its last two checks add and remove the
-alias `10.99.0.1/32` on `lo0` to test change detection, so they only run on QNX, as root. On a Linux host it
-runs the first three checks only.
-
-**ring on QNX vs the host.** Check that ring produces the same bytes on both:
-
-```bash
-cargo run -q --release --target x86_64-unknown-linux-gnu -p random-smoke -- ring-vectors > /tmp/host.txt
-cargo run -q --release -p random-smoke -- ring-vectors > /tmp/qnx.txt
-diff /tmp/host.txt /tmp/qnx.txt && echo identical
-```
-
-**UDP over the real NIC (host ↔ target):**
-
-```bash
-IP=$(scripts/qnx-target-ip.sh)
-SSH="ssh -o UserKnownHostsFile=$HOME/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ident root@$IP"
-cargo run -p tokio-smoke                                  # deploys the current build
-$SSH 'cd bin && (./tokio-smoke serve 0.0.0.0:9999 > /tmp/serve.log 2>&1 &)'
-python3 scripts/udp-echo-client.py $IP 9999 2000          # -> 2000/2000 echoed ..., rtt p50=...
-$SSH 'slay -f tokio-smoke'
-```
-
-`tokio-smoke` knobs, set on the target:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `UDP_CLIENTS` | 32 | concurrent UDP clients |
-| `UDP_ROUNDS` | 100 | round trips per client |
-| `UDP_RCVBUF` | 1 MiB | the server's `SO_RCVBUF` (QNX's default is small) |
-
-## 6. Build tailscale-rs for QNX
+Needed for tailscale-rs's own examples, and by this repo's `netmon-smoke` and `ts-forward`, which build
+tailscale-rs crates from `~/Projects/tailscale-rs`. So do this before building anything in step 4.
 
 **a. Check out v0.7.1 and apply the QNX patch.** The patch does two things:
 - switches TLS from aws-lc-rs (which doesn't build with qcc) to ring on QNX; host builds still use aws-lc-rs
@@ -232,23 +134,131 @@ EOF
 echo '/.cargo/' >> .git/info/exclude
 ```
 
-**c. Build.** tailscale-rs pins stable Rust, so pass the nightly and the target explicitly:
+## 4. Build
+
+Every shell that builds for QNX needs `source ~/qnx800/qnxsdp-env.sh` first. Cargo prints
+`warning: patch ... was not used in the crate graph` for the crate forks in both repos: it's spurious with
+`-Zbuild-std` (`cargo tree --target x86_64-pc-qnx -i mio` shows the fork is used).
+
+**a. This repo** (smoke tests and `ts-forward`). The target, linker and nightly come from this repo's
+`rust-toolchain.toml` and `.cargo/config.toml`, so plain `cargo` works:
 
 ```bash
 source ~/qnx800/qnxsdp-env.sh
-cargo +nightly-2026-11-09 build --release --target x86_64-pc-qnx --example tcp_echo
+cd ~/Projects/QNX/tailscale-QNX
+cargo build --workspace --release    # release (panic=abort); drop --release for debug
 ```
 
-- **Output:** `target/x86_64-pc-qnx/release/examples/tcp_echo`. The release profile uses LTO and strips the
-  binary, so the build takes a few minutes.
-- **Always use release builds** for the target. Debug examples are about 42 MB even stripped, and the VM's `/data`
-  is 61 MB.
-- **Cargo.lock changes:** the build rewrites `Cargo.lock` to point at the forks. Don't commit those changes.
-- **Ignore `warning: patch ... was not used in the crate graph`.** It's spurious with `-Zbuild-std`.
-  `cargo tree --target x86_64-pc-qnx -i mio` shows the fork is used.
+The first build compiles std itself and takes a few minutes. Binaries go to
+`target/x86_64-pc-qnx/{debug,release}/`.
+
+**b. tailscale-rs examples.** tailscale-rs pins stable Rust, so pass the nightly and the target explicitly:
+
+```bash
+source ~/qnx800/qnxsdp-env.sh
+cd ~/Projects/tailscale-rs
+cargo +nightly-2026-11-09 build --release --target x86_64-pc-qnx --example tcp_echo --example peer_ping
+```
+
+- **Output:** `target/x86_64-pc-qnx/release/examples/{tcp_echo,peer_ping}`. The release profile uses LTO and
+  strips the binaries, so the build takes a few minutes.
+- **Cargo.lock changes:** the build rewrites tailscale-rs's `Cargo.lock` to point at the forks. Don't commit
+  those changes.
 
 Host builds and tests in tailscale-rs work as before, because the config only applies with
 `--target x86_64-pc-qnx`.
+
+**Which to use:** release builds for anything deployed to the target. Debug builds of the tailscale-rs examples
+are about 42 MB even stripped, and the VM's `/data` is 61 MB.
+
+## 5. Set up the QEMU target (once)
+
+The target is a mkqnximage project at `~/qnxprojects/targets/qemu-qnx800-x86_64`, for example one created by
+the QNX VS Code extension. It needs two changes before you can deploy over ssh.
+
+**a. Fix sshd.** The SDP's OpenSSH needs `sshd-auth`, but mkqnximage's image template only installs
+`sshd-session`. Without this fix, sshd fails at boot with `/usr/libexec/sshd-auth does not exist`.
+
+```bash
+cd ~/qnxprojects/targets/qemu-qnx800-x86_64
+cat >> local/snippets/system_files.custom <<'EOF'
+
+# OpenSSH 10 in the SDP needs sshd-auth; the stock template only installs sshd-session.
+bin/sshd-auth=usr/libexec/sshd-auth
+EOF
+cat >> local/snippets/ifs_files.custom <<'EOF'
+
+# sshd looks for sshd-auth at its compiled-in default path.
+[type=link] /usr/libexec/sshd-auth=/system/bin/sshd-auth
+EOF
+```
+
+**b. Install your ssh key for root and rebuild.** Rebuilding the image **wipes the data partition**.
+
+```bash
+./mkqnximage-wrapper.sh --ssh-ident=$HOME/.ssh/id_ed25519.pub --build
+```
+
+**Using the QNX VS Code extension from another machine?** The extension keeps its target list in your local
+VS Code user settings. Add the existing VM to `qnx.targets.list`, with `"vmtype": "qemu"` and
+`"path": "/home/<you>/qnxprojects/targets/qemu-qnx800-x86_64"`. Don't use "Create QNX Virtual Target" for it:
+that rebuilds the image.
+
+## 6. Run the smoke tests
+
+Boot the VM headless. The serial console goes to `output/qemu.out`.
+
+```bash
+cd ~/qnxprojects/targets/qemu-qnx800-x86_64
+./mkqnximage-wrapper.sh --run=-h
+grep 'Startup complete' output/qemu.out     # booted when this prints
+```
+
+Then, from this repo, `cargo run` builds, deploys and runs in one step:
+
+```bash
+source ~/qnx800/qnxsdp-env.sh
+cargo run -p hello                 # hello from Rust on qnx (x86_64), pid ...
+cargo run -p std-smoke             # 13 checks, 0 required failures
+cargo run -p tokio-smoke           # 5 checks, 0 failures
+cargo run -p random-smoke          # 4 checks, 0 failures
+cargo run -p rustix-smoke          # 5 checks, 0 failures
+cargo run -p netmon-smoke          # 5 checks, 0 failures
+```
+
+Add `--release` to test release builds. Each test exits non-zero if a required check fails. `std-smoke`'s
+`net/internet` check is optional and prints `WARN` if the VM has no outbound network.
+
+`netmon-smoke` builds `ts_netmon` from `~/Projects/tailscale-rs`. Its last two checks add and remove the
+alias `10.99.0.1/32` on `lo0` to test change detection, so they only run on QNX, as root. On a Linux host it
+runs the first three checks only.
+
+**ring on QNX vs the host.** Check that ring produces the same bytes on both:
+
+```bash
+cargo run -q --release --target x86_64-unknown-linux-gnu -p random-smoke -- ring-vectors > /tmp/host.txt
+cargo run -q --release -p random-smoke -- ring-vectors > /tmp/qnx.txt
+diff /tmp/host.txt /tmp/qnx.txt && echo identical
+```
+
+**UDP over the real NIC (host ↔ target):**
+
+```bash
+IP=$(scripts/qnx-target-ip.sh)
+SSH="ssh -o UserKnownHostsFile=$HOME/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ident root@$IP"
+cargo run -p tokio-smoke                                  # deploys the current build
+$SSH 'cd bin && (./tokio-smoke serve 0.0.0.0:9999 > /tmp/serve.log 2>&1 &)'
+python3 scripts/udp-echo-client.py $IP 9999 2000          # -> 2000/2000 echoed ..., rtt p50=...
+$SSH 'slay -f tokio-smoke'
+```
+
+`tokio-smoke` knobs, set on the target:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `UDP_CLIENTS` | 32 | concurrent UDP clients |
+| `UDP_ROUNDS` | 100 | round trips per client |
+| `UDP_RCVBUF` | 1 MiB | the server's `SO_RCVBUF` (QNX's default is small) |
 
 ## 7. Join a tailnet from QNX
 
@@ -292,7 +302,7 @@ tcp_echo logs `accepted connection` when `nc` connects. For more detail, run it 
 
 ### Testing the network monitor
 
-Besides `netmon-smoke` (step 5), the tailscale-rs side has two tests that run on the target. Both need the
+Besides `netmon-smoke` (step 6), the tailscale-rs side has two tests that run on the target. Both need the
 `wait-timeout` fork, because tailscale-rs examples and tests pull in `proptest`.
 
 **ts_netmon's unit tests** (9 tests). The runner deploys and runs them. Delete the binary afterwards to save
@@ -330,11 +340,11 @@ don't embed tailscale-rs:
 - **Outbound:** local ports to tailnet peers, so local programs can reach peers. They can't reach `100.x`
   addresses directly, because the tailnet only exists inside ts-forward.
 
-It needs the tailscale-rs checkout from step 6.
+Build it with this repo's workspace (step 4a, or `cargo build --release -p ts-forward`) and deploy it:
 
 ```bash
-source ~/qnx800/qnxsdp-env.sh
-cargo build --release -p ts-forward
+IP=$(scripts/qnx-target-ip.sh)
+SSHOPT="-o UserKnownHostsFile=$HOME/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ident"
 scp $SSHOPT target/x86_64-pc-qnx/release/ts-forward root@$IP:/data/home/root/bin/
 ```
 
@@ -354,7 +364,6 @@ ssh -p 2201 user@127.0.0.1               # ...then, on the target, reach the pee
   admin console, looked up in the network map for each connection. `BIND` defaults to `127.0.0.1`; use
   `0.0.0.0:2201=...` only if other hosts on the device's LAN should be able to use the forward.
 - **Defaults:** with only `--to` given, no inbound forwards are opened. Add `-p ssh` to get both.
-
 - **Identity:** its own key file, `ts-forward-keys.json` (`-c` to change). The first run prints a login URL, or
   takes `-k`/`TS_AUTH_KEY`. The device name defaults to the OS hostname (`-H` to change).
 - **Access control:** your tailnet policy decides which peers can connect. The local service sees connections
@@ -362,10 +371,11 @@ ssh -p 2201 user@127.0.0.1               # ...then, on the target, reach the pee
 - **`qconn` has no authentication:** anyone allowed to reach it can run programs on the target as root.
   Only enable it on a tailnet whose policy restricts access to this device.
 - **TCP only.** Multi-connection protocols like FTP don't work through it.
-- `--max-connections` (default 64) caps simultaneous connections; `--connect-timeout` (5 s) bounds local connects.
+- **Limits:** `--max-connections` (default 64) caps simultaneous connections in both directions; `--connect-timeout`
+  (default 10 s) bounds each local or tailnet connect.
 
 From another device on the tailnet: `ssh root@<tailnet IP>`. sshd on the target only accepts the keys
-installed with `--ssh-ident` (step 4b).
+installed with `--ssh-ident` (step 5b).
 
 ## How deployment works
 
@@ -397,10 +407,10 @@ ssh -o UserKnownHostsFile=~/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ide
 | `linker 'qcc' not found` | `source ~/qnx800/qnxsdp-env.sh` in this shell |
 | `` error[E0463]: can't find crate for `core` `` | `rust-src` is missing: `rustup component add rust-src --toolchain nightly-2026-11-09` |
 | `failed to read .../qnx-crates/<crate>/Cargo.toml` | Run `scripts/setup-qnx-crates.sh` |
-| `aws-lc-sys` build fails with `--include=` | The tailscale-rs patch isn't applied (step 6a) |
-| `ssh: connect ... Connection refused` | sshd isn't running: apply step 4a and rebuild the image |
-| `Permission denied (publickey,...)` | Rebuild the image with `--ssh-ident` (step 4b) |
+| `aws-lc-sys` build fails with `--include=` | The tailscale-rs patch isn't applied (step 3a) |
+| `ssh: connect ... Connection refused` | sshd isn't running: apply step 5a and rebuild the image |
+| `Permission denied (publickey,...)` | Rebuild the image with `--ssh-ident` (step 5b) |
 | `no DHCP lease for ...` / `No route to host` | The VM hasn't finished booting (check `output/qemu.out`) or isn't running (`pgrep -a qemu-system`) |
 | `No space left on device` during deploy | Clear `/data/home/root/bin` on the target, run `sync` (qnx6 frees space only then), and deploy release builds |
 | tcp_echo exits with `410 Gone` after login | Run it again; the node was registered |
-| `` cannot find value `SA_RESTART` `` in `wait-timeout` | The `wait-timeout` fork isn't in tailscale-rs's `[patch.crates-io]` (step 6b) |
+| `` cannot find value `SA_RESTART` `` in `wait-timeout` | The `wait-timeout` fork isn't in tailscale-rs's `[patch.crates-io]` (step 3b) |

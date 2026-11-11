@@ -130,7 +130,7 @@ only check for `nto`, so the patching rule is:
 > Add `qnx` wherever `nto` appears. Where a crate splits `nto70`/`nto71`, send `qnx` down the **io-sock**
 > (`nto71_iosock`) side.
 
-`scripts/add-qnx-cfg.py` does the mechanical part. Some crates also gate dependencies in `Cargo.toml`, which
+`scripts/add-qnx-cfg.sh` does the mechanical part. Some crates also gate dependencies in `Cargo.toml`, which
 the script doesn't touch. Each fork is a pristine crates.io commit plus an uncommitted diff, saved as
 `patches/<crate>-<version>.patch`.
 

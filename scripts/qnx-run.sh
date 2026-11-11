@@ -3,15 +3,21 @@
 # Works as a cargo runner: `runner = "scripts/qnx-run.sh"` (cargo calls it with <binary> [args...]).
 #
 # Env:
-#   QNX_HOST_IP     target address (default: looked up from the libvirt DHCP lease)
+#   QNX_HOST_IP     target address (default: `mkqnximage --getip` in QNX_TARGET_DIR)
 #   QNX_USER        ssh user (default: root)
 #   QNX_TARGET_DIR  mkqnximage target dir (default: ~/qnxprojects/targets/qemu-qnx800-x86_64)
 #   QNX_REMOTE_DIR  where binaries go on the target (default: /data/home/$QNX_USER/bin)
+#
+# Needs the QNX SDP environment (source ~/qnx800/qnxsdp-env.sh) for mkqnximage and ntox86_64-strip.
 set -euo pipefail
-here=$(cd "$(dirname "$0")" && pwd)
 bin=$1; shift
 TARGET_DIR=${QNX_TARGET_DIR:-$HOME/qnxprojects/targets/qemu-qnx800-x86_64}
-ip=${QNX_HOST_IP:-$("$here/qnx-target-ip.sh" "$TARGET_DIR")}
+# The VM's IP changes on every boot; mkqnximage finds it from the VM's MAC address.
+ip=${QNX_HOST_IP:-$(cd "$TARGET_DIR" && mkqnximage --getip 2>/dev/null | tail -n1)} || true
+if [ -z "$ip" ]; then
+    echo "qnx-run: can't find the target's IP (is the VM in $TARGET_DIR running? set QNX_HOST_IP to skip the lookup)" >&2
+    exit 1
+fi
 user=${QNX_USER:-root}
 remote_dir=${QNX_REMOTE_DIR:-/data/home/$user/bin}
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=5 -o UserKnownHostsFile="$TARGET_DIR/local/ssh-ident")

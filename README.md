@@ -14,7 +14,7 @@ Plan, status and open issues: [PORTING_PLAN.md](PORTING_PLAN.md).
 
 ### Prerequisites
 
-- Linux x86_64 host with `rustup`, `git`, `curl` and `python3`, and an ssh key at `~/.ssh/id_ed25519`
+- Linux x86_64 host with `rustup`, `git` and `curl`, and an ssh key at `~/.ssh/id_ed25519`
   (`ssh-keygen -t ed25519` if you don't have one).
 - QNX SDP 8.0 installed at `~/qnx800`.
 - QEMU and libvirt, for the QNX VM: `qemu-system-x86_64`, libvirt's default NAT network (`virbr0`),
@@ -71,7 +71,8 @@ grep 'Startup complete' output/qemu.out
 From the repo root:
 
 ```bash
-IP=$(scripts/qnx-target-ip.sh)
+source ~/qnx800/qnxsdp-env.sh
+IP=$(cd ~/qnxprojects/targets/qemu-qnx800-x86_64 && mkqnximage --getip)
 SSHOPT="-o UserKnownHostsFile=$HOME/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ident"
 scp $SSHOPT target/x86_64-pc-qnx/release/ts-forward root@$IP:/data/home/root/bin/
 ssh $SSHOPT root@$IP
@@ -122,8 +123,7 @@ ssh root@<tailnet IP of the target>
 | `patches/tailscale-rs/*.patch` | This port's changes to tailscale-rs, against `v0.7.1`: TLS via ring (`0001`), polling network monitor (`0002`) |
 | `scripts/setup.sh` | Creates `build/`: the crate forks, the patched tailscale-rs checkout and its cargo config |
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the target and runs it over ssh |
-| `scripts/qnx-target-ip.sh` | Prints the QEMU VM's current IP |
-| `scripts/add-qnx-cfg.py` | Adds `target_os = "qnx"` next to every `target_os = "nto"` cfg, for patching more crates |
+| `scripts/add-qnx-cfg.sh` | Adds `target_os = "qnx"` next to every `target_os = "nto"` cfg, for patching more crates |
 | `smoke/*` | Smoke tests for the port itself (below) |
 | `scripts/udp-echo-client.py` | Host-side client for `tokio-smoke serve` |
 | `build/` | Created by `scripts/setup.sh`, git-ignored: `patched-crates/` and `tailscale-rs/` |
@@ -175,12 +175,13 @@ git diff v0.7.1 -- crates/net/underlay/ts_netmon > ../../patches/tailscale-rs/00
 2. copies it to `/data/home/root/bin/` on the target
 3. runs it over ssh, passing the arguments through and returning its exit code
 
-It finds the VM's IP with `scripts/qnx-target-ip.sh`, from libvirt's DHCP leases (the IP changes on every boot).
+It finds the VM's IP with `mkqnximage --getip` in the target folder (the IP changes on every boot), so it needs
+the SDP environment sourced.
 It doesn't forward environment variables; to set any, run the binary over ssh yourself.
 
 | Variable | Default |
 |---|---|
-| `QNX_HOST_IP` | looked up from `/var/lib/libvirt/dnsmasq/virbr0.status` |
+| `QNX_HOST_IP` | looked up with `mkqnximage --getip` in `QNX_TARGET_DIR` |
 | `QNX_USER` | `root` |
 | `QNX_TARGET_DIR` | `~/qnxprojects/targets/qemu-qnx800-x86_64` |
 | `QNX_REMOTE_DIR` | `/data/home/$QNX_USER/bin` |
@@ -211,10 +212,10 @@ cargo run -q --release -p random-smoke -- ring-vectors > /tmp/qnx.txt
 diff /tmp/host.txt /tmp/qnx.txt && echo identical
 ```
 
-**UDP over the real network card** (host to target):
+**UDP over the real network card** (host to target; the client needs `python3`):
 
 ```bash
-IP=$(scripts/qnx-target-ip.sh)
+IP=$(cd ~/qnxprojects/targets/qemu-qnx800-x86_64 && mkqnximage --getip)
 SSH="ssh -o UserKnownHostsFile=$HOME/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ident root@$IP"
 cargo run -p tokio-smoke                                  # deploys the current build
 $SSH 'cd bin && (./tokio-smoke serve 0.0.0.0:9999 > /tmp/serve.log 2>&1 &)'
@@ -261,7 +262,7 @@ up as `AddrUpsert` within 10 s, and `ifconfig lo0 inet 10.99.0.1 -alias` as `Add
 If another crate fails to build for `target_os = "qnx"`:
 1. Add a fork in `build/patched-crates/<crate>-<version>/`: pristine crates.io source committed, as
    `scripts/setup.sh` does.
-2. Run `scripts/add-qnx-cfg.py` on its files that mention `target_os = "nto"`, and review the
+2. Run `scripts/add-qnx-cfg.sh` on its files that mention `target_os = "nto"`, and review the
    `all(target_os = "nto", ...)` sites it flags. Check its `Cargo.toml` target tables too.
 3. Save `git diff` as `patches/<crate>-<version>.patch`, and add the fork to this repo's `Cargo.toml`
    `[patch.crates-io]`. Rerun `scripts/setup.sh` to update tailscale-rs's config.
@@ -291,7 +292,7 @@ that rebuilds the image.
 | `` cannot find value `SA_RESTART` `` in `wait-timeout` | tailscale-rs's `.cargo/config.toml` is missing the `wait-timeout` fork: rerun `scripts/setup.sh`, or merge its `config.toml.setup-new` |
 | sshd fails at boot with `/usr/libexec/sshd-auth does not exist`, or `ssh: connect ... Connection refused` | The `sshd-auth` lines from Getting Started step 4 are missing: add them to `local/snippets/` and run `mkqnximage --build` (wipes the data partition) |
 | `Permission denied (publickey,...)` | The image was built without your key: rerun `mkqnximage --ssh-ident=$HOME/.ssh/id_ed25519.pub` in the target folder |
-| `no DHCP lease for ...` / `No route to host` | The VM hasn't finished booting (check `output/qemu.out`) or isn't running (`pgrep -a qemu-system`) |
+| `qnx-run: can't find the target's IP` / `No route to host` | The VM hasn't finished booting (check `output/qemu.out`) or isn't running (`pgrep -a qemu-system`). The runner also needs `source ~/qnx800/qnxsdp-env.sh` |
 | `No space left on device` during deploy | Clear `/data/home/root/bin` on the target, run `sync` (qnx6 frees space only then), and deploy release builds |
 | Exits with `410 Gone` / `auth path not found` right after the login URL is approved | Known tailscale-rs issue. The approval worked: run it again |
 | `tailscale ping` from a peer gets no reply | Expected while traffic goes through DERP: tailscale-rs only answers pings that arrive over a direct path. Test with a TCP connection instead |

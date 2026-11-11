@@ -49,7 +49,8 @@ struct Args {
     #[arg(short = 'k', long, env = "TS_AUTH_KEY")]
     auth_key: Option<String>,
 
-    /// Hostname to request on the tailnet. Defaults to the OS hostname.
+    /// Name to request on the tailnet. Defaults to the OS hostname (unless that's empty or
+    /// "localhost", in which case the control server picks one).
     #[arg(short = 'H', long)]
     hostname: Option<String>,
 
@@ -87,6 +88,12 @@ struct Args {
     /// Don't listen on the device's tailnet IPv6 address.
     #[arg(long)]
     no_ipv6: bool,
+
+    /// Seconds to wait for the Tailscale control server at startup before exiting with an error.
+    /// tailscale-rs doesn't retry a failed first connection (e.g. DNS not ready yet), so exiting
+    /// lets a supervisor restart it. Waiting for a login URL to be approved isn't limited by this.
+    #[arg(long, default_value_t = 60)]
+    startup_timeout: u64,
 }
 
 /// One tailnet port forwarded to one local target.
@@ -267,14 +274,23 @@ async fn main() -> ExitCode {
 
 async fn run(args: Args, forwards: Vec<Forward>, outbound: Vec<Outbound>) -> Result<(), Box<dyn Error>> {
     let mut config = Config::default_with_key_file(&args.key_file).await?;
-    config.requested_hostname = args.hostname.clone();
+    config.requested_hostname = args.hostname.clone().or_else(os_hostname);
+    tracing::info!(hostname = config.requested_hostname.as_deref().unwrap_or("(none)"), "requesting tailnet name");
     if let Some(url) = args.control_url.clone() {
         config.control_server_url = url;
     }
 
-    let dev = Arc::new(Device::new(&config, args.auth_key.clone()).await?);
+    let startup = Duration::from_secs(args.startup_timeout);
+    let no_control = || format!("no response from the control server within {} s (network or DNS not ready?)", startup.as_secs());
 
-    if let AuthState::NotAuthorized(url) = dev.is_authorized().await? {
+    let dev = Arc::new(
+        tokio::time::timeout(startup, Device::new(&config, args.auth_key.clone()))
+            .await
+            .map_err(|_| no_control())??,
+    );
+
+    let auth = tokio::time::timeout(startup, dev.is_authorized()).await.map_err(|_| no_control())??;
+    if let AuthState::NotAuthorized(url) = auth {
         tracing::warn!(%url, "device not authorized: open the URL to approve it (if this exits afterwards, run it again)");
     }
     let ipv4 = wait_for_ipv4(&dev).await?;
@@ -309,6 +325,19 @@ async fn run(args: Args, forwards: Vec<Forward>, outbound: Vec<Outbound>) -> Res
         dev.shutdown(Some(Duration::from_secs(3))).await;
     }
     Ok(())
+}
+
+/// The OS hostname, if it's set to something meaningful.
+///
+/// tailscale-rs's `Config` passes `requested_hostname` through as-is, so leaving it `None` registers
+/// the device without a name (the control server then calls it "node").
+fn os_hostname() -> Option<String> {
+    meaningful_hostname(&gethostname::gethostname().into_string().ok()?)
+}
+
+fn meaningful_hostname(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty() && !name.eq_ignore_ascii_case("localhost")).then(|| name.to_owned())
 }
 
 /// The tailnet address appears once the device is registered and has its first network map.
@@ -516,6 +545,15 @@ mod tests {
         for bad in ["2201", "2201=laptop", "2201=:22", "0=laptop:22", "2201=laptop:0", "x=laptop:22", "1.2.3.4:0=laptop:22"] {
             assert!(parse_outbound(bad).is_err(), "{bad} should be rejected");
         }
+    }
+
+    #[test]
+    fn hostname_fallback() {
+        assert_eq!(meaningful_hostname("qnx-tailscale").as_deref(), Some("qnx-tailscale"));
+        assert_eq!(meaningful_hostname(" pi5\n").as_deref(), Some("pi5"));
+        assert_eq!(meaningful_hostname("localhost"), None);
+        assert_eq!(meaningful_hostname("LOCALHOST"), None);
+        assert_eq!(meaningful_hostname(""), None);
     }
 
     #[test]

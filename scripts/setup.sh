@@ -1,26 +1,28 @@
 #!/bin/bash
-# Set up everything this repo builds against, outside the repo itself:
+# Set up everything this repo builds against:
 #
-#   1. Crate forks: each patches/<crate>-<version>.patch -> $QNX_CRATES_DIR/<crate>-<version>/
+#   1. Crate forks: each patches/<crate>-<version>.patch -> <repo>/build/patched-crates/<crate>-<version>/
 #      (pristine crates.io source committed, QNX patch applied on top, uncommitted).
-#   2. tailscale-rs: cloned at $TAILSCALE_RS_REF into $TAILSCALE_RS_DIR, with
+#   2. tailscale-rs: cloned at $TAILSCALE_RS_REF into <repo>/build/tailscale-rs (git-ignored), with
 #      patches/tailscale-rs/*.patch applied in order (uncommitted, on a local branch `$TAILSCALE_RS_REF-qnx`).
 #      The patches are this port's changes to tailscale-rs; upstream has no QNX branch.
 #   3. tailscale-rs's local .cargo/config.toml: QNX target settings plus a [patch.crates-io]
 #      entry for every fork from step 1, with absolute paths. Excluded from git.
 #
 # Usage: scripts/setup.sh
-# Env:   QNX_CRATES_DIR    (default: <repo>/../qnx-crates, i.e. ~/Projects/QNX/qnx-crates)
-#        TAILSCALE_RS_DIR  (default: <repo>/../../tailscale-rs, i.e. ~/Projects/tailscale-rs)
-#        TAILSCALE_RS_REF  (default: v0.7.1)
+# Env:   TAILSCALE_RS_REF  (default: v0.7.1)
+#
+# Everything goes in <repo>/build/ (git-ignored), where the workspace's path dependencies expect it.
+# Delete build/ and rerun to start over.
 #
 # Safe to rerun: existing forks and checkouts are left alone, an already-applied patch is detected,
 # and a cargo config this script didn't write is never overwritten.
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-crates=${QNX_CRATES_DIR:-$repo/../qnx-crates}
-tsrs=${TAILSCALE_RS_DIR:-$repo/../../tailscale-rs}
+crates=$repo/build/patched-crates
+# The workspace's path dependencies (apps/ts-forward, smoke/netmon-smoke) expect it here.
+tsrs=$repo/build/tailscale-rs
 tsrs_ref=${TAILSCALE_RS_REF:-v0.7.1}
 mkdir -p "$crates"
 crates=$(cd "$crates" && pwd)
@@ -49,6 +51,7 @@ done
 
 # --- 2. tailscale-rs checkout + QNX patch ----------------------------------------------------
 if [ ! -e "$tsrs" ]; then
+    mkdir -p "$(dirname "$tsrs")"
     git clone -q https://github.com/tailscale/tailscale-rs.git "$tsrs"
     git -C "$tsrs" checkout -q -b "$tsrs_ref-qnx" "$tsrs_ref"
     echo "cloned tailscale-rs at $tsrs_ref (local branch $tsrs_ref-qnx)"
@@ -129,4 +132,4 @@ exclude=$(git -C "$tsrs" rev-parse --path-format=absolute --git-path info/exclud
 mkdir -p "$(dirname "$exclude")"
 grep -qxF '/.cargo/' "$exclude" 2>/dev/null || echo '/.cargo/' >> "$exclude"
 
-echo "== done. Next: source ~/qnx800/qnxsdp-env.sh, then build (README step 3)."
+echo "== done. Next: source ~/qnx800/qnxsdp-env.sh, then build (README, Getting Started step 3)."

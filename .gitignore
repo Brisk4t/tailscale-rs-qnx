@@ -1,2 +1,4 @@
 /target
+# crate forks and tailscale-rs checkout, created by scripts/setup.sh
+build/*
 diagnostics.md

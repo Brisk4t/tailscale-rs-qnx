@@ -1,19 +1,25 @@
 [workspace]
 resolver = "3"
 members = ["smoke/*", "apps/*"]
+# A plain `cargo build` builds only the apps. The smoke tests are for developing the port:
+# build them with `--workspace` or `-p <name>`.
+default-members = ["apps/*"]
+# build/ holds the crate forks and the tailscale-rs checkout (scripts/setup.sh). Without this, cargo would
+# make them members of this workspace, because they're path dependencies inside this directory.
+exclude = ["build"]
 
 [profile.release]
 panic = "abort"
 
-# QNX 8.0 (`target_os = "qnx"`) forks at the exact versions tailscale-rs locks.
+# QNX 8.0 (`target_os = "qnx"`) forks at the exact versions tailscale-rs locks, created by scripts/setup.sh.
 [patch.crates-io]
-mio = { path = "../qnx-crates/mio-1.2.4" }
-socket2 = { path = "../qnx-crates/socket2-0.6.5" }
-tokio = { path = "../qnx-crates/tokio-1.54.1" }
-getrandom02 = { package = "getrandom", path = "../qnx-crates/getrandom-0.2.17" }
-getrandom03 = { package = "getrandom", path = "../qnx-crates/getrandom-0.3.4" }
-getrandom04 = { package = "getrandom", path = "../qnx-crates/getrandom-0.4.3" }
-ring = { path = "../qnx-crates/ring-0.17.14" }
-signal-hook-registry = { path = "../qnx-crates/signal-hook-registry-1.4.8" }
-errno = { path = "../qnx-crates/errno-0.3.14" }
-rustix = { path = "../qnx-crates/rustix-1.1.6" }
+mio = { path = "build/patched-crates/mio-1.2.4" }
+socket2 = { path = "build/patched-crates/socket2-0.6.5" }
+tokio = { path = "build/patched-crates/tokio-1.54.1" }
+getrandom02 = { package = "getrandom", path = "build/patched-crates/getrandom-0.2.17" }
+getrandom03 = { package = "getrandom", path = "build/patched-crates/getrandom-0.3.4" }
+getrandom04 = { package = "getrandom", path = "build/patched-crates/getrandom-0.4.3" }
+ring = { path = "build/patched-crates/ring-0.17.14" }
+signal-hook-registry = { path = "build/patched-crates/signal-hook-registry-1.4.8" }
+errno = { path = "build/patched-crates/errno-0.3.14" }
+rustix = { path = "build/patched-crates/rustix-1.1.6" }

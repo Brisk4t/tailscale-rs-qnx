@@ -5,8 +5,8 @@ edition = "2024"
 description = "Expose local TCP services (ssh, https, qconn, ...) on a tailnet, using tailscale-rs"
 
 [dependencies]
-# The `tailscale` crate straight from the tailscale-rs checkout (branch `qnx`).
-tailscale = { path = "../../../../tailscale-rs" }
+# The `tailscale` crate from the patched tailscale-rs checkout that scripts/setup.sh creates in build/.
+tailscale = { path = "../../build/tailscale-rs" }
 # Same version tailscale-rs locks, so the QNX fork in [patch.crates-io] applies.
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "signal"] }
 clap = { version = "4", features = ["derive", "env"] }

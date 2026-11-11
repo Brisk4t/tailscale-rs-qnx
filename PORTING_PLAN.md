@@ -3,7 +3,8 @@
 **Goal:** a QNX 8.0 program on a tailnet. x86_64 first, on the QEMU target
 `~/qnxprojects/targets/qemu-qnx800-x86_64`; aarch64 later.
 
-**Source:** `~/Projects/tailscale-rs` at v0.7.1 (`a2a56c4`) plus local commits.
+**Source:** tailscale-rs v0.7.1 (`a2a56c4`) plus this port's patches, checked out by `scripts/setup.sh` in
+`build/tailscale-rs`.
 
 **What you get:** tailscale-rs is a library, like Go's `tsnet`. A QNX process embeds it and opens TCP/UDP
 sockets on the tailnet through a userspace network stack (smoltcp); other processes on the device aren't on
@@ -31,8 +32,8 @@ How to build and run everything: [README.md](README.md).
   - gets a tailnet address (100.77.109.107)
   - echoes `nc` input from a peer running the regular Tailscale client, over DERP
 - That exercises TLS (ring), the control channel, DERP, WireGuard (`ts_tunnel`) and the smoltcp stack.
-- All six smoke tests pass on the target: `hello`, `std-smoke`, `tokio-smoke`, `random-smoke`,
-  `rustix-smoke` and `netmon-smoke`.
+- All five smoke tests pass on the target: `std-smoke`, `tokio-smoke`, `random-smoke`, `rustix-smoke` and
+  `netmon-smoke`.
 
 ---
 
@@ -60,7 +61,7 @@ How to build and run everything: [README.md](README.md).
   - `-Zbuild-std`
   - `CC`/`CXX`/`AR` for C dependencies
   - runner: `scripts/qnx-run.sh`
-- [x] Fix the target image so sshd starts and accepts root key login (see README §4).
+- [x] Fix the target image so sshd starts and accepts root key login (see README, Getting Started step 4).
 - [x] Smoke tests pass on the target:
   - [x] `hello`
   - [x] `std-smoke` (13 checks)
@@ -70,7 +71,7 @@ How to build and run everything: [README.md](README.md).
 
 ## Phase 1: Crate ecosystem ✅
 
-- [x] Fork each crate that doesn't know `target_os = "qnx"` into `~/Projects/QNX/qnx-crates/`, at the locked
+- [x] Fork each crate that doesn't know `target_os = "qnx"` into `build/patched-crates/` (by `scripts/setup.sh`), at the locked
       versions (see [Crate patches](#crate-patches)).
 - [x] Discovery loop: build `-p tailscale --examples` and fix the next failing crate, until the whole build
       succeeds.

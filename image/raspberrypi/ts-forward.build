@@ -1,0 +1,7 @@
+
+################################################################################################
+## ts-forward (appended to the BSP's buildfile by tailscale-QNX scripts/build-image.sh)
+################################################################################################
+[perms=0755] /usr/bin/ts-forward=${TS_FORWARD_BIN}
+[perms=0755] /usr/sbin/ntpdate=ntpdate
+[perms=0755] /scripts/board_startup.sh=${TS_FORWARD_STARTUP}

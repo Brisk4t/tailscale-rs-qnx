@@ -78,12 +78,15 @@ config=$tsrs/.cargo/config.toml
 new=$(mktemp)
 {
     echo "$marker; rerun it to regenerate. Not for upstream (excluded via .git/info/exclude)."
-    echo "# Host builds are unaffected: everything below only applies with --target x86_64-pc-qnx."
+    echo "# Host builds are unaffected: everything below only applies with --target x86_64-pc-qnx or aarch64-unknown-qnx."
     cat <<EOF
 
 [target.x86_64-pc-qnx]
 linker = "qcc"
 runner = "$repo/scripts/qnx-run.sh"
+
+[target.aarch64-unknown-qnx]
+linker = "qcc"
 
 [unstable]
 build-std = ["std", "panic_abort"]
@@ -94,6 +97,11 @@ CFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64"
 CXX_x86_64_pc_qnx = "q++"
 CXXFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64_cxx"
 AR_x86_64_pc_qnx = "ntox86_64-ar"
+CC_aarch64_unknown_qnx = "qcc"
+CFLAGS_aarch64_unknown_qnx = "-Vgcc_ntoaarch64le"
+CXX_aarch64_unknown_qnx = "q++"
+CXXFLAGS_aarch64_unknown_qnx = "-Vgcc_ntoaarch64le_cxx"
+AR_aarch64_unknown_qnx = "ntoaarch64-ar"
 
 [patch.crates-io]
 EOF

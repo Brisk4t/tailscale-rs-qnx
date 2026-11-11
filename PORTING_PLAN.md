@@ -60,7 +60,7 @@ How to build and run everything: [README.md](README.md).
   - `-Zbuild-std`
   - `CC`/`CXX`/`AR` for C dependencies
   - runner: `scripts/qnx-run.sh`
-- [x] Fix the target image so sshd starts and accepts root key login (see README §5).
+- [x] Fix the target image so sshd starts and accepts root key login (see README §4).
 - [x] Smoke tests pass on the target:
   - [x] `hello`
   - [x] `std-smoke` (13 checks)
@@ -87,7 +87,7 @@ How to build and run everything: [README.md](README.md).
     - re-reads `getifaddrs` every 10 s and diffs against the last snapshot
     - the `platform_mon()` fallback on every Unix without a dedicated backend (previously `None`)
     - validated on QNX by `smoke/netmon-smoke`
-    - committed on tailscale-rs branch `qnx` (`df19edc`)
+    - in `patches/tailscale-rs/0002-polling-netmon.patch` (developed as `df19edc` on the local `qnx` branch)
   - [x] Run `tcp_echo` with it against the tailnet; check the runtime advertises the LAN address.
   - [ ] Optional real backend: reuse `ts_netmon/src/bsd/` (PF_ROUTE, currently macOS-only). io-sock is
         FreeBSD-derived, so adapt `bsd/net_table/{interface_hdr,route_hdr}.rs` to the layouts in
@@ -167,8 +167,9 @@ to their OSes.
 | `crates/net/underlay/ts_netmon/src/polling.rs` + cfg wiring | `PollingMon`: polls `getifaddrs` every 10 s; the `platform_mon()` fallback on Unix without a dedicated backend | QNX has no netmon backend (open issue 3). Validated by `netmon-smoke`, the `monitor` example, and ts_netmon's unit tests on the target |
 | `.cargo/config.toml` (local only) | QNX target config and `[patch.crates-io]` | See above |
 
-Committed on tailscale-rs branch `qnx` and exported (source only, no `Cargo.lock`) as
-`patches/tailscale-rs/tailscale-rs-0.7.1.patch`, which applies to tag `v0.7.1`.
+Developed on a local tailscale-rs branch `qnx` (upstream has no QNX branch) and exported, source only, without
+`Cargo.lock`, as `patches/tailscale-rs/0001-tls-ring-on-qnx.patch` and `0002-polling-netmon.patch`. They apply in
+order to tag `v0.7.1`; `scripts/setup.sh` applies them to a fresh clone.
 
 ---
 

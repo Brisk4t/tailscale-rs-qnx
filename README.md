@@ -16,10 +16,10 @@ Bugs under investigation: [diagnostics.md](diagnostics.md).
 | `smoke/random-smoke` | getrandom 0.2/0.3/0.4 and ring checks; `ring-vectors` mode for comparing against the host |
 | `smoke/rustix-smoke` | `gethostname` and `rustix::system::uname` against the target's `hostname` and `uname` |
 | `smoke/netmon-smoke` | tailscale-rs's polling network monitor (`ts_netmon::PollingMon`) against `ifconfig`, plus change detection |
-| `apps/ts-forward` | Exposes local TCP services (ssh, https, qconn, ...) on the tailnet, and lets local programs reach tailnet peers; see step 8 |
+| `apps/ts-forward` | Exposes local TCP services (ssh, https, qconn, ...) on the tailnet, and lets local programs reach tailnet peers; see step 7 |
 | `patches/<crate>-<version>.patch` | QNX patches for mio, socket2, tokio, getrandom ×3, ring, signal-hook-registry, errno, rustix, wait-timeout |
-| `patches/tailscale-rs/tailscale-rs-0.7.1.patch` | The QNX changes to tailscale-rs itself: TLS via ring, polling network monitor |
-| `scripts/setup-qnx-crates.sh` | Downloads the crates from crates.io and applies the patches |
+| `patches/tailscale-rs/*.patch` | This port's changes to tailscale-rs itself, against `v0.7.1`: TLS via ring, polling network monitor |
+| `scripts/setup.sh` | Creates the crate forks, clones and patches tailscale-rs, and writes its QNX cargo config (step 2) |
 | `scripts/qnx-run.sh` | Cargo runner: copies a binary to the QNX target and runs it over ssh |
 | `scripts/qnx-target-ip.sh` | Prints the QEMU target's current IP |
 | `scripts/udp-echo-client.py` | Host-side client for `tokio-smoke serve` |
@@ -44,11 +44,11 @@ Expected layout:
 ~/Projects/
 ├── QNX/
 │   ├── tailscale-QNX/      this repo
-│   └── qnx-crates/         patched crate forks (step 2)
-└── tailscale-rs/           upstream checkout at v0.7.1, QNX patch applied (step 3)
+│   └── qnx-crates/         patched crate forks (created by step 2)
+└── tailscale-rs/           upstream checkout at v0.7.1, QNX patch applied (created by step 2)
 ```
 
-This repo's `Cargo.toml` finds the forks by relative path. tailscale-rs's local config uses absolute paths.
+This repo's `Cargo.toml` finds the forks by relative path; tailscale-rs's generated config uses absolute paths.
 
 ## 1. Toolchain
 
@@ -72,69 +72,40 @@ source ~/qnx800/qnxsdp-env.sh
 - the `CC`/`CXX`/`AR` settings for C dependencies
 - `scripts/qnx-run.sh` as the runner
 
-## 2. Patched crates
+## 2. Set up the crate forks and tailscale-rs
 
-Several crates don't know `target_os = "qnx"` yet. Create the patched forks:
-
-```bash
-scripts/setup-qnx-crates.sh          # -> ~/Projects/QNX/qnx-crates/<crate>-<version>/
-```
-
-Each fork is a git repo: one commit with the pristine crates.io source, and the QNX patch left uncommitted.
-`git diff` in a fork shows exactly the change. PORTING_PLAN.md explains why each crate needs a patch.
-
-## 3. Check out tailscale-rs
-
-Needed for tailscale-rs's own examples, and by this repo's `netmon-smoke` and `ts-forward`, which build
-tailscale-rs crates from `~/Projects/tailscale-rs`. So do this before building anything in step 4.
-
-**a. Check out v0.7.1 and apply the QNX patch.** The patch does two things:
-- switches TLS from aws-lc-rs (which doesn't build with qcc) to ring on QNX; host builds still use aws-lc-rs
-- adds a polling network monitor (`ts_netmon::PollingMon`), used on QNX and other Unixes with no dedicated backend
+One script sets up everything outside this repo:
 
 ```bash
-cd ~/Projects
-git clone https://github.com/tailscale/tailscale-rs.git && cd tailscale-rs
-git checkout v0.7.1
-git apply ~/Projects/QNX/tailscale-QNX/patches/tailscale-rs/tailscale-rs-0.7.1.patch
+scripts/setup.sh
 ```
 
-**b. Add a local cargo config.** It holds the QNX target settings and points the patched crates at the
-forks. It's excluded from git, so upstream files stay untouched. Replace `<you>` with your username:
+1. **Crate forks** in `~/Projects/QNX/qnx-crates/<crate>-<version>/`, for the crates that don't know
+   `target_os = "qnx"` yet (`patches/<crate>-<version>.patch`). Each fork is a git repo: one commit with the
+   pristine crates.io source, and the QNX patch left uncommitted, so `git diff` in a fork shows exactly the
+   change. PORTING_PLAN.md explains why each crate needs a patch.
+2. **tailscale-rs** cloned at `v0.7.1` into `~/Projects/tailscale-rs`, on a local branch `v0.7.1-qnx`, with this
+   port's patches applied in order, uncommitted. Upstream has no QNX branch; the patches are the whole change:
+   - `0001-tls-ring-on-qnx.patch`: switches TLS from aws-lc-rs (which doesn't build with qcc) to ring on QNX.
+     Host builds still use aws-lc-rs.
+   - `0002-polling-netmon.patch`: adds a polling network monitor (`ts_netmon::PollingMon`), used on QNX and other
+     Unixes with no dedicated backend.
+3. **tailscale-rs's local `.cargo/config.toml`:** the QNX target settings, plus a `[patch.crates-io]` entry
+   for every fork, with absolute paths. It's excluded from git, so upstream files stay untouched, and it only
+   applies with `--target x86_64-pc-qnx`, so host builds and tests in tailscale-rs work as before.
 
-```bash
-mkdir -p .cargo && cat > .cargo/config.toml <<'EOF'
-[target.x86_64-pc-qnx]
-linker = "qcc"
-runner = "/home/<you>/Projects/QNX/tailscale-QNX/scripts/qnx-run.sh"
+This repo's `netmon-smoke` and `ts-forward` build tailscale-rs crates from that checkout, so run the script
+before building anything.
 
-[unstable]
-build-std = ["std", "panic_abort"]
+The script is safe to rerun:
+- existing forks and an existing checkout are left alone
+- a patch that's already applied (or committed) is detected
+- a `.cargo/config.toml` it didn't write is never overwritten; it writes `config.toml.setup-new` next to it instead
 
-[env]
-CC_x86_64_pc_qnx = "qcc"
-CFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64"
-CXX_x86_64_pc_qnx = "q++"
-CXXFLAGS_x86_64_pc_qnx = "-Vgcc_ntox86_64_cxx"
-AR_x86_64_pc_qnx = "ntox86_64-ar"
+To use other locations, set `QNX_CRATES_DIR`, `TAILSCALE_RS_DIR` or `TAILSCALE_RS_REF`. If you move
+`qnx-crates`, also update the relative paths in this repo's `Cargo.toml`.
 
-[patch.crates-io]
-mio     = { path = "/home/<you>/Projects/QNX/qnx-crates/mio-1.2.4" }
-socket2 = { path = "/home/<you>/Projects/QNX/qnx-crates/socket2-0.6.5" }
-tokio   = { path = "/home/<you>/Projects/QNX/qnx-crates/tokio-1.54.1" }
-getrandom02 = { package = "getrandom", path = "/home/<you>/Projects/QNX/qnx-crates/getrandom-0.2.17" }
-getrandom03 = { package = "getrandom", path = "/home/<you>/Projects/QNX/qnx-crates/getrandom-0.3.4" }
-getrandom04 = { package = "getrandom", path = "/home/<you>/Projects/QNX/qnx-crates/getrandom-0.4.3" }
-ring    = { path = "/home/<you>/Projects/QNX/qnx-crates/ring-0.17.14" }
-signal-hook-registry = { path = "/home/<you>/Projects/QNX/qnx-crates/signal-hook-registry-1.4.8" }
-errno   = { path = "/home/<you>/Projects/QNX/qnx-crates/errno-0.3.14" }
-rustix  = { path = "/home/<you>/Projects/QNX/qnx-crates/rustix-1.1.6" }
-wait-timeout = { path = "/home/<you>/Projects/QNX/qnx-crates/wait-timeout-0.2.1" }
-EOF
-echo '/.cargo/' >> .git/info/exclude
-```
-
-## 4. Build
+## 3. Build
 
 Every shell that builds for QNX needs `source ~/qnx800/qnxsdp-env.sh` first. Cargo prints
 `warning: patch ... was not used in the crate graph` for the crate forks in both repos: it's spurious with
@@ -165,13 +136,10 @@ cargo +nightly-2026-11-09 build --release --target x86_64-pc-qnx --example tcp_e
 - **Cargo.lock changes:** the build rewrites tailscale-rs's `Cargo.lock` to point at the forks. Don't commit
   those changes.
 
-Host builds and tests in tailscale-rs work as before, because the config only applies with
-`--target x86_64-pc-qnx`.
-
 **Which to use:** release builds for anything deployed to the target. Debug builds of the tailscale-rs examples
 are about 42 MB even stripped, and the VM's `/data` is 61 MB.
 
-## 5. Set up the QEMU target (once)
+## 4. Set up the QEMU target (once)
 
 The target is a mkqnximage project at `~/qnxprojects/targets/qemu-qnx800-x86_64`, for example one created by
 the QNX VS Code extension. It needs two changes before you can deploy over ssh.
@@ -204,7 +172,7 @@ VS Code user settings. Add the existing VM to `qnx.targets.list`, with `"vmtype"
 `"path": "/home/<you>/qnxprojects/targets/qemu-qnx800-x86_64"`. Don't use "Create QNX Virtual Target" for it:
 that rebuilds the image.
 
-## 6. Run the smoke tests
+## 5. Run the smoke tests
 
 Boot the VM headless. The serial console goes to `output/qemu.out`.
 
@@ -260,7 +228,7 @@ $SSH 'slay -f tokio-smoke'
 | `UDP_ROUNDS` | 100 | round trips per client |
 | `UDP_RCVBUF` | 1 MiB | the server's `SO_RCVBUF` (QNX's default is small) |
 
-## 7. Join a tailnet from QNX
+## 6. Join a tailnet from QNX
 
 **Deploy** the release binary:
 
@@ -302,7 +270,7 @@ tcp_echo logs `accepted connection` when `nc` connects. For more detail, run it 
 
 ### Testing the network monitor
 
-Besides `netmon-smoke` (step 6), the tailscale-rs side has two tests that run on the target. Both need the
+Besides `netmon-smoke` (step 5), the tailscale-rs side has two tests that run on the target. Both need the
 `wait-timeout` fork, because tailscale-rs examples and tests pull in `proptest`.
 
 **ts_netmon's unit tests** (9 tests). The runner deploys and runs them. Delete the binary afterwards to save
@@ -332,7 +300,7 @@ ifconfig lo0 inet 10.99.0.1 -alias        # AddrRemoved within 10 s
 endpoints in the admin console should include its LAN address (`192.168.122.x:<port>`). An alias added as
 above should appear there too.
 
-## 8. Expose local services with ts-forward
+## 7. Expose local services with ts-forward
 
 `ts-forward` joins the tailnet as its own device and forwards TCP connections both ways, for programs that
 don't embed tailscale-rs:
@@ -340,7 +308,7 @@ don't embed tailscale-rs:
 - **Outbound:** local ports to tailnet peers, so local programs can reach peers. They can't reach `100.x`
   addresses directly, because the tailnet only exists inside ts-forward.
 
-Build it with this repo's workspace (step 4a, or `cargo build --release -p ts-forward`) and deploy it:
+Build it with this repo's workspace (step 3a, or `cargo build --release -p ts-forward`) and deploy it:
 
 ```bash
 IP=$(scripts/qnx-target-ip.sh)
@@ -375,7 +343,7 @@ ssh -p 2201 user@127.0.0.1               # ...then, on the target, reach the pee
   (default 10 s) bounds each local or tailnet connect.
 
 From another device on the tailnet: `ssh root@<tailnet IP>`. sshd on the target only accepts the keys
-installed with `--ssh-ident` (step 5b).
+installed with `--ssh-ident` (step 4b).
 
 ## How deployment works
 
@@ -406,11 +374,11 @@ ssh -o UserKnownHostsFile=~/qnxprojects/targets/qemu-qnx800-x86_64/local/ssh-ide
 |---|---|
 | `linker 'qcc' not found` | `source ~/qnx800/qnxsdp-env.sh` in this shell |
 | `` error[E0463]: can't find crate for `core` `` | `rust-src` is missing: `rustup component add rust-src --toolchain nightly-2026-11-09` |
-| `failed to read .../qnx-crates/<crate>/Cargo.toml` | Run `scripts/setup-qnx-crates.sh` |
-| `aws-lc-sys` build fails with `--include=` | The tailscale-rs patch isn't applied (step 3a) |
-| `ssh: connect ... Connection refused` | sshd isn't running: apply step 5a and rebuild the image |
-| `Permission denied (publickey,...)` | Rebuild the image with `--ssh-ident` (step 5b) |
+| `failed to read .../qnx-crates/<crate>/Cargo.toml` or `.../tailscale-rs/...` | Run `scripts/setup.sh` |
+| `aws-lc-sys` build fails with `--include=` | The tailscale-rs patch isn't applied: run `scripts/setup.sh` |
+| `ssh: connect ... Connection refused` | sshd isn't running: apply step 4a and rebuild the image |
+| `Permission denied (publickey,...)` | Rebuild the image with `--ssh-ident` (step 4b) |
 | `no DHCP lease for ...` / `No route to host` | The VM hasn't finished booting (check `output/qemu.out`) or isn't running (`pgrep -a qemu-system`) |
 | `No space left on device` during deploy | Clear `/data/home/root/bin` on the target, run `sync` (qnx6 frees space only then), and deploy release builds |
 | tcp_echo exits with `410 Gone` after login | Run it again; the node was registered |
-| `` cannot find value `SA_RESTART` `` in `wait-timeout` | The `wait-timeout` fork isn't in tailscale-rs's `[patch.crates-io]` (step 3b) |
+| `` cannot find value `SA_RESTART` `` in `wait-timeout` | tailscale-rs's `.cargo/config.toml` is missing the `wait-timeout` fork: rerun `scripts/setup.sh` (or merge its `config.toml.setup-new`) |

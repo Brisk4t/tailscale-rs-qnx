@@ -10,8 +10,8 @@ forwards TCP both ways between tailnet peers and local services such as sshd, a 
 | Target | Architecture | Status |
 |---|---|---|
 | QEMU VM (mkqnximage) | x86_64 | Joins a tailnet; TCP and UDP to peers work |
-| Raspberry Pi 5 | ARM64 | QNX boots; ts-forward runs and reaches the control server. The BSP-based image is new |
-| Raspberry Pi 4 | ARM64 | Image builds; not yet tested on a board |
+| Raspberry Pi 5 | ARM64 | Joins a tailnet; TCP and UDP to peers work |
+| Raspberry Pi 4 | ARM64 | Joins a tailnet; TCP and UDP to peers work |
 
 Plan, status and open issues: [PORTING_PLAN.md](PORTING_PLAN.md).
 
@@ -19,19 +19,15 @@ Plan, status and open issues: [PORTING_PLAN.md](PORTING_PLAN.md).
 
 ## Getting Started
 
+These steps build ts-forward and run it on a QNX VM in QEMU. For a Raspberry Pi, do steps 1 to 3 here, then
+follow [Raspberry Pi](#raspberry-pi).
+
 ### Prerequisites
 
-- A Linux x86_64 host with `rustup`, `git`, `curl` and `unzip`.
+- A Linux x86_64 host with `rustup`, `git`, `curl` and `unzip`, and an ssh key at `~/.ssh/id_ed25519`.
 - QNX SDP 8.0 installed at `~/qnx800`.
-- For a **Raspberry Pi 4 or 5**: the board's BSP, installed into the SDP with QNX Software Center:
-  ```bash
-  ~/qnx/qnxsoftwarecenter/qnxsoftwarecenter_clt -installPackage com.qnx.qnx800.bsp.hw.raspberrypi_bcm2712_rpi5 -destination ~/qnx800   # Pi 5
-  ~/qnx/qnxsoftwarecenter/qnxsoftwarecenter_clt -installPackage com.qnx.qnx800.bsp.hw.raspberrypi_bcm2711_rpi4 -destination ~/qnx800   # Pi 4
-  ```
-  plus [Raspberry Pi Imager](https://www.raspberrypi.com/software/) and a microSD card. A USB serial adapter or
-  Raspberry Pi Debug Probe is useful for seeing the console, but not required.
-- For the **QEMU VM**: `qemu-system-x86_64`, libvirt's default NAT network (`virbr0`), `allow virbr0` in
-  `/etc/qemu/bridge.conf`, a setuid `qemu-bridge-helper`, and an ssh key at `~/.ssh/id_ed25519`.
+- For the VM: `qemu-system-x86_64`, libvirt's default NAT network (`virbr0`), `allow virbr0` in
+  `/etc/qemu/bridge.conf` and a setuid `qemu-bridge-helper`.
 
 ### 1. Install the toolchain
 
@@ -59,55 +55,10 @@ cargo build --release --target aarch64-unknown-qnx    # ARM64:  target/aarch64-u
 
 Build the one for your target, or both. The first build takes a few minutes.
 
-### 4a. Raspberry Pi 4 or 5
+### 4. Create the QNX VM
 
-Build the QNX boot image. This follows the board's BSP User's Guide: ts-forward is added to the BSP's
-buildfile and the BSP's own `make` builds the image.
-
-```bash
-source ~/qnx800/qnxsdp-env.sh
-IMAGE_TYPE=rasppi5 scripts/build-image.sh        # Pi 5; IMAGE_TYPE=rasppi for a Pi 4
-```
-
-The result is `build/image/rasppi5/bootfs/`: `ifs-rpi5.bin` (the QNX boot image), `config.txt` and a
-`ts-forward/` folder. To make the SD card:
-
-1. Write **Raspberry Pi OS** to it with Raspberry Pi Imager. That gives the card a FAT boot partition
-   (`bootfs`) with the Pi's firmware and device trees.
-2. Copy everything in `bootfs/` onto that partition, replacing its `config.txt`:
-   ```bash
-   cp -r build/image/rasppi5/bootfs/. /media/$USER/bootfs/
-   ```
-3. Optional: put an auth key in `ts-forward/authkey` on that partition, so the device joins without a login
-   URL (or build with `TS_AUTH_KEY=...`, which puts it in `bootfs/` for you).
-
-Put the card in the Pi, connect Ethernet and power it on. ts-forward starts at boot and the device appears in
-your Tailscale admin console as `qnx-tailscale`. Without an auth key, the login URL to approve is in
-`ts-forward/ts-forward.log` on the card (or on the serial console). Then, from any device on your tailnet:
-
-```bash
-ssh qnxuser@<tailnet IP of the Pi>
-```
-
-The BSP image's sshd doesn't allow root logins; `qnxuser` is its default user. QNX documents its default
-password as `qnxuser` (and root's as `root`). These are development defaults built into the image's read-only
-`/etc/shadow`, so they can't be changed on the device. With ssh forwarded to your tailnet, anyone your tailnet
-policy lets reach the Pi can try them: restrict access to it in the policy, or leave ssh out of `args`.
-
-The files in `ts-forward/` on the card control it, and can be edited from any computer:
-
-| File | |
-|---|---|
-| `args` | ts-forward's forwards (`-p ssh` by default; see [Using ts-forward](#using-ts-forward)) |
-| `hostname` | the device's name, also its tailnet name (`qnx-tailscale` by default) |
-| `authkey` | optional auth key for the first registration |
-| `keys.json` | the device's tailnet identity, created on first start and kept across reboots |
-| `ts-forward.log` | the current boot's log (the previous one is `ts-forward.log.old`) |
-
-### 4b. QEMU VM (x86_64)
-
-**Create the VM** (once). This builds a QEMU image with the SDP's `mkqnximage`. The two `sshd-auth` lines are
-needed by the SDP's OpenSSH; `--ssh-ident` installs your key for root.
+Once. This builds a QEMU image with the SDP's `mkqnximage`. The two `sshd-auth` lines are needed by the SDP's
+OpenSSH; `--ssh-ident` installs your key for root.
 
 ```bash
 source ~/qnx800/qnxsdp-env.sh
@@ -120,7 +71,9 @@ mkqnximage --run=-h                              # boot it, headless
 grep 'Startup complete' output/qemu.out          # booted when this prints
 ```
 
-**Deploy and run ts-forward**, from the repo root:
+### 5. Deploy and run ts-forward
+
+From the repo root:
 
 ```bash
 source ~/qnx800/qnxsdp-env.sh
@@ -164,15 +117,94 @@ ts-forward --help                                # everything else
 
 ### Image settings
 
-Environment variables for `scripts/build-image.sh`:
+Environment variables for `scripts/build-image.sh`, for both the VM and Raspberry Pi images:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `IMAGE_TYPE` | `qemu` | `rasppi5` (Pi 5), `rasppi` (Pi 4), `qemu`, or another `mkqnximage --type` such as `vmware` |
+| `IMAGE_TYPE` | `qemu` | `qemu`, `rasppi5` (Pi 5), `rasppi` (Pi 4), or another `mkqnximage --type` such as `vmware` |
 | `TS_FORWARD_ARGS` | `-p ssh` | ts-forward's forwards, e.g. `"-p qnx-dev -p web"`. Raspberry Pi: written to `bootfs/ts-forward/args` |
-| `TS_AUTH_KEY` | none | joins the tailnet on first boot without the login URL. Raspberry Pi: written to `bootfs/ts-forward/authkey`; QEMU: stored in the image. Use a single-use key |
+| `TS_AUTH_KEY` | none | joins the tailnet on first boot without the login URL. QEMU: stored in the image; Raspberry Pi: written to `bootfs/ts-forward/authkey`. Use a single-use key |
 | `IMAGE_HOSTNAME` | `qnx-tailscale` | the QNX hostname, also the device's tailnet name. Raspberry Pi: written to `bootfs/ts-forward/hostname` |
 | `SSH_IDENT` | `~/.ssh/id_ed25519.pub` | QEMU: public key for root ssh login |
+
+---
+
+## Raspberry Pi
+
+![RPi SSH](image.png)
+![Tailscale Console](tailscaleadmin.png)
+
+ts-forward on a Raspberry Pi 4 or 5 (ARM64), as a QNX boot image built with the board's BSP. Do steps 1 to 3 of
+[Getting Started](#getting-started) first, including the ARM64 build.
+
+### Prerequisites
+
+- The board's BSP, installed into the SDP with QNX Software Center:
+  ```bash
+  ~/qnx/qnxsoftwarecenter/qnxsoftwarecenter_clt -installPackage com.qnx.qnx800.bsp.hw.raspberrypi_bcm2712_rpi5 -destination ~/qnx800   # Pi 5
+  ~/qnx/qnxsoftwarecenter/qnxsoftwarecenter_clt -installPackage com.qnx.qnx800.bsp.hw.raspberrypi_bcm2711_rpi4 -destination ~/qnx800   # Pi 4
+  ```
+- [Raspberry Pi Imager](https://www.raspberrypi.com/software/) and a microSD card.
+- Ethernet for the Pi. A USB serial adapter or Raspberry Pi Debug Probe is useful for seeing the console, but
+  not required.
+
+### Build the image
+
+This follows the board's BSP User's Guide: ts-forward is added to the BSP's buildfile and the BSP's own `make`
+builds the image.
+
+```bash
+source ~/qnx800/qnxsdp-env.sh
+cargo build --release --target aarch64-unknown-qnx
+IMAGE_TYPE=rasppi5 scripts/build-image.sh        # Pi 5; IMAGE_TYPE=rasppi for a Pi 4
+```
+
+The result is `build/image/rasppi5/bootfs/`: `ifs-rpi5.bin` (the QNX boot image), `config.txt` and a
+`ts-forward/` folder. The [image settings](#image-settings) apply.
+
+### Make the SD card
+
+1. Write **Raspberry Pi OS** to it with Raspberry Pi Imager. That gives the card a FAT boot partition
+   (`bootfs`) with the Pi's firmware and device trees.
+2. Copy everything in `bootfs/` onto that partition, replacing its `config.txt`:
+   ```bash
+   cp -r build/image/rasppi5/bootfs/. /media/$USER/bootfs/
+   ```
+3. Optional: put an auth key in `ts-forward/authkey` on that partition, so the device joins without a login
+   URL (or build with `TS_AUTH_KEY=...`, which puts it in `bootfs/` for you).
+
+### Boot and connect
+
+Put the card in the Pi, connect Ethernet and power it on. ts-forward starts at boot and the device appears in
+your Tailscale admin console as `qnx-tailscale`. Without an auth key, the login URL to approve is in
+`ts-forward/ts-forward.log` on the card (or on the serial console). Then, from any device on your tailnet:
+
+```bash
+ssh qnxuser@<tailnet IP of the Pi>
+```
+
+The BSP image's sshd doesn't allow root logins; `qnxuser` is its default user. QNX documents its default
+password as `qnxuser` (and root's as `root`). These are development defaults built into the image's read-only
+`/etc/shadow`, so they can't be changed on the device. With ssh forwarded to your tailnet, anyone your tailnet
+policy lets reach the Pi can try them: restrict access to it in the policy, or leave ssh out of `args`.
+
+There's no screen output: QNX's console is the serial UART (on the Pi 5, the 3-pin connector between the
+micro-HDMI ports; 115200 8N1).
+
+### Files on the card
+
+The files in `ts-forward/` on the boot partition control ts-forward, and can be edited from any computer:
+
+| File | |
+|---|---|
+| `args` | ts-forward's forwards (`-p ssh` by default; see [Using ts-forward](#using-ts-forward)) |
+| `hostname` | the device's name, also its tailnet name (`qnx-tailscale` by default) |
+| `authkey` | optional auth key for the first registration |
+| `keys.json` | the device's tailnet identity, created on first start and kept across reboots |
+| `ts-forward.log` | the current boot's log (the previous one is `ts-forward.log.old`) |
+
+At boot, the image waits for the network and sets the clock with NTP (the Pi has no battery-backed clock)
+before starting ts-forward, and restarts it if it exits. Replacing `ifs-rpi5.bin` keeps the device's identity.
 
 ---
 
@@ -364,11 +396,10 @@ that rebuilds the image.
 | `failed to read .../build/patched-crates/...` or `.../build/tailscale-rs/...` | Run `scripts/setup.sh` |
 | `aws-lc-sys` build fails with `--include=` | The tailscale-rs patches aren't applied: run `scripts/setup.sh` |
 | `` cannot find value `SA_RESTART` `` in `wait-timeout` | tailscale-rs's `.cargo/config.toml` is missing the `wait-timeout` fork: rerun `scripts/setup.sh`, or merge its `config.toml.setup-new` |
-| `error: no Raspberry Pi rpi5 BSP in .../bsp` | Install the board's BSP (Getting Started, Prerequisites) |
+| `error: no Raspberry Pi rpi5 BSP in .../bsp` | Install the board's BSP ([Raspberry Pi](#raspberry-pi), Prerequisites) |
 | Pi boots Raspberry Pi OS instead of QNX | `config.txt` on the card wasn't replaced: copy `bootfs/config.txt` over it |
 | Pi: device registers as `node` | It registered before `hostname` was set: rename it in the admin console, or delete `ts-forward/keys.json` on the card to register again |
-| Pi: no screen output | Expected: QNX's console is the serial UART (on the Pi 5, the 3-pin connector between the micro-HDMI ports; 115200 8N1) |
-| VM: sshd fails at boot with `/usr/libexec/sshd-auth does not exist`, or `ssh: connect ... Connection refused` | The `sshd-auth` lines from step 4b are missing: add them to `local/snippets/` and run `mkqnximage --build` (wipes the data partition) |
+| VM: sshd fails at boot with `/usr/libexec/sshd-auth does not exist`, or `ssh: connect ... Connection refused` | The `sshd-auth` lines from Getting Started step 4 are missing: add them to `local/snippets/` and run `mkqnximage --build` (wipes the data partition) |
 | VM: `Permission denied (publickey,...)` | The image was built without your key: rerun `mkqnximage --ssh-ident=$HOME/.ssh/id_ed25519.pub` in the target folder |
 | `qnx-run: can't find the target's IP` / `No route to host` | The VM hasn't finished booting (check `output/qemu.out`) or isn't running (`pgrep -a qemu-system`). The runner also needs `source ~/qnx800/qnxsdp-env.sh` |
 | `No space left on device` during deploy | Clear `/data/home/root/bin` on the VM, run `sync` (qnx6 frees space only then), and deploy release builds |

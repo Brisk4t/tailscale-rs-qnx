@@ -123,9 +123,33 @@ Environment variables for `scripts/build-image.sh`, for both the VM and Raspberr
 |---|---|---|
 | `IMAGE_TYPE` | `qemu` | `qemu`, `rasppi5` (Pi 5), `rasppi` (Pi 4), or another `mkqnximage --type` such as `vmware` |
 | `TS_FORWARD_ARGS` | `-p ssh` | ts-forward's forwards, e.g. `"-p qnx-dev -p web"`. Raspberry Pi: written to `bootfs/ts-forward/args` |
-| `TS_AUTH_KEY` | none | joins the tailnet on first boot without the login URL. QEMU: stored in the image; Raspberry Pi: written to `bootfs/ts-forward/authkey`. Use a single-use key |
+| `TS_AUTH_KEY` | none | joins the tailnet on first boot without the login URL; see [Auth keys](#auth-keys) |
 | `IMAGE_HOSTNAME` | `qnx-tailscale` | the QNX hostname, also the device's tailnet name. Raspberry Pi: written to `bootfs/ts-forward/hostname` |
 | `SSH_IDENT` | `~/.ssh/id_ed25519.pub` | QEMU: public key for root ssh login |
+
+### Auth keys
+
+An auth key lets a device join your tailnet on its first boot without approving a login URL.
+
+1. Create one in the Tailscale admin console under **Settings → Keys → Generate auth key**. Make it
+   **single-use** and **not ephemeral** (ephemeral devices are removed when they go offline). Pre-approve it if
+   your tailnet requires device approval, and add tags if your policy uses them.
+2. Pass it to the image build without putting it in your shell history:
+   ```bash
+   read -s -p 'Tailscale auth key: ' TS_AUTH_KEY; echo; export TS_AUTH_KEY
+   IMAGE_TYPE=rasppi5 scripts/build-image.sh       # or no IMAGE_TYPE for the VM image
+   unset TS_AUTH_KEY
+   ```
+   The build's summary says `auth key: included`.
+   - **VM image:** the key is stored in the image's data partition (root-only). Every build without
+     `TS_AUTH_KEY` leaves it out, so set it on each rebuild that should join on its own.
+   - **Raspberry Pi:** the key is written to `bootfs/ts-forward/authkey`, and from there onto the card. You
+     can also skip the build step and write the file on the card yourself:
+     `echo 'tskey-auth-...' > /media/$USER/bootfs/ts-forward/authkey`.
+
+The key is only used for the first registration. After that the device uses its saved identity (`keys.json`),
+so a used single-use key left in the image or on the card can't add more devices. Anyone with an unused one can,
+so treat the image or card as a secret until the device has joined.
 
 ---
 
@@ -170,8 +194,9 @@ The result is `build/image/rasppi5/bootfs/`: `ifs-rpi5.bin` (the QNX boot image)
    ```bash
    cp -r build/image/rasppi5/bootfs/. /media/$USER/bootfs/
    ```
-3. Optional: put an auth key in `ts-forward/authkey` on that partition, so the device joins without a login
-   URL (or build with `TS_AUTH_KEY=...`, which puts it in `bootfs/` for you).
+3. Optional: an auth key in `ts-forward/authkey` on that partition, so the device joins without a login URL.
+   Either build with `TS_AUTH_KEY` (it's then in `bootfs/` already) or write the file yourself; see
+   [Auth keys](#auth-keys).
 
 ### Boot and connect
 

@@ -1,5 +1,7 @@
 # tailscale-rs-QNX
 
+![Tailscale QNX](QNXTailscale.png)
+
 [tailscale-rs](https://github.com/tailscale/tailscale-rs) on QNX OS 8.0, for x86_64 (`x86_64-pc-qnx`) and ARM64
 (`aarch64-unknown-qnx`).
 
